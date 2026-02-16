@@ -2,9 +2,9 @@ import numpy as np
 from typing import List
 from sklearn.ensemble import IsolationForest
 from models import InsightEvent, RRWebEvent, BoundingBox
-from utils import calcular_distancia, calcular_angulo
+from utils import calculate_distance, calculate_angle
 
-def detectar_anomalias_comportamentais(events: List[RRWebEvent]) -> List[InsightEvent]:
+def detect_behavioral_anomalies(events: List[RRWebEvent]) -> List[InsightEvent]:
     """
     Detecta movimentos erráticos usando Isolation Forest (IA Não Supervisionada).
     """
@@ -48,15 +48,15 @@ def detectar_anomalias_comportamentais(events: List[RRWebEvent]) -> List[Insight
         dt = (p2['timestamp'] - p1['timestamp']) / 1000.0  # segundos
         if dt <= 0: continue
         
-        dist = calcular_distancia(p1, p2)
+        dist = calculate_distance(p1, p2)
         velocidade = dist / dt
         
-        angulo = calcular_angulo(p1, p2)
+        angulo = calculate_angle(p1, p2)
         
         # Variação Angular (requer pelo menos 3 pontos)
         if i > 1:
             p0 = move_points[i-2]
-            angulo_anterior = calcular_angulo(p0, p1)
+            angulo_anterior = calculate_angle(p0, p1)
             delta_angulo = angulo - angulo_anterior
             # Normaliza para o intervalo [-pi, pi]
             delta_angulo = (delta_angulo + np.pi) % (2 * np.pi) - np.pi
@@ -98,7 +98,7 @@ def detectar_anomalias_comportamentais(events: List[RRWebEvent]) -> List[Insight
 
     return insights
 
-def detectar_rage_clicks(events: List[RRWebEvent]) -> List[InsightEvent]:
+def detect_rage_clicks(events: List[RRWebEvent]) -> List[InsightEvent]:
     """
     Detecta 'Rage Clicks' usando heurística baseada em regras.
     """
@@ -131,7 +131,7 @@ def detectar_rage_clicks(events: List[RRWebEvent]) -> List[InsightEvent]:
                 break
             
             # Raio de 30px
-            dist = calcular_distancia(clicks[i], clicks[j])
+            dist = calculate_distance(clicks[i], clicks[j])
             if dist <= 30:
                 cluster.append(clicks[j])
         
