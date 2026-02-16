@@ -4,7 +4,9 @@ PSYCHOMETRICS_SYSTEM = "Você é um especialista em UX e Psicologia Cognitiva. R
 
 SEMANTIC_REPAIR_SYSTEM = "Você é um especialista em Acessibilidade Web (WCAG) e WAI-ARIA. Responda estritamente em JSON."
 
-# --- User Prompts (Templates com marcadores {variável}) ---
+JOURNEY_ANALYSIS_SYSTEM = "Você é um analista de fluxos de navegação. Sua tarefa é identificar se uma sequência de URLs indica progresso ou confusão."
+
+# --- User Prompts (Templates) ---
 
 PSYCHOMETRICS_USER = """
 Analise a frustração (0-10) e carga cognitiva (0-10) desta sessão de usuário: {narrative}. 
@@ -18,6 +20,17 @@ O elemento atual é semanticamente correto para essa ação? Se não, reescreva 
 Retorne um JSON com os campos: original_html, fixed_html e explanation.
 """
 
-# --- Outras Configurações ---
+JOURNEY_ANALYSIS_USER = """
+Analise a seguinte sequência de URLs visitadas por um usuário:
+{urls}
 
-HAPPY_PATH_JOURNEY = "Home -> Busca -> Produto -> Compra"
+Com base na semântica das URLs, o usuário parece estar:
+1. Em uma progressão lógica para concluir uma tarefa?
+2. Em um loop (visitando páginas similares sem avançar)?
+3. Navegando de forma errática/aleatória?
+
+Retorne um JSON com os campos:
+- status: "progressing" | "looping" | "erratic"
+- reasoning: "Sua explicação técnica"
+- confidence_score: (0-10)
+"""

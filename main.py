@@ -57,9 +57,9 @@ async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
         narrative = semantic_engine.generate_session_narrative(request.events)
         psychometrics = await semantic_engine.analyze_psychometrics(narrative)
 
-        # 2. Classificação de Intenção (Assíncrono)
+        # 2. Análise de Coerência de Jornada (Assíncrono e Agnóstico)
         urls = [e.data.get('href') for e in request.events if e.type == 4 and e.data.get('href')]
-        intent = await semantic_engine.classify_intent(urls)
+        intent = await semantic_engine.analyze_journey_coherence(urls)
 
         # 3. Self-Healing (Assíncrono)
         rage_clicks = detect_rage_clicks(request.events)
