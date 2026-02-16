@@ -4,6 +4,7 @@ import aiohttp
 import numpy as np
 from typing import List, Dict, Any
 from models import RRWebEvent
+import prompts
 
 # --- Configurações de Ambiente (Agnóstico de Plataforma) ---
 API_TOKEN: str = os.getenv("AI_API_TOKEN") or os.getenv("CHUTES_API_TOKEN") or ""
@@ -53,8 +54,8 @@ async def analyze_psychometrics(narrativa: str) -> Dict[str, Any]:
     body = {
         "model": LLM_MODEL,
         "messages": [
-            {"role": "system", "content": "Você é um especialista em UX. Responda estritamente em JSON."},
-            {"role": "user", "content": f"Analise a frustração (0-10) e carga cognitiva (0-10) desta sessão: {narrativa}. Retorne JSON com frustration_score, cognitive_load_score e reasoning."}
+            {"role": "system", "content": prompts.PSYCHOMETRICS_SYSTEM},
+            {"role": "user", "content": prompts.PSYCHOMETRICS_USER.format(narrative=narrativa)}
         ],
         "temperature": 0.3
     }
@@ -75,8 +76,11 @@ async def semantic_code_repair(html_snippet: str, interaction_type: str) -> Dict
     body = {
         "model": LLM_MODEL,
         "messages": [
-            {"role": "system", "content": "Você é um especialista em Acessibilidade e WAI-ARIA. Responda estritamente em JSON."},
-            {"role": "user", "content": f"O usuário tentou '{interaction_type}' neste HTML: {html_snippet}. Se não for semântico, corrija. Retorne JSON com: original_html, fixed_html, explanation."}
+            {"role": "system", "content": prompts.SEMANTIC_REPAIR_SYSTEM},
+            {"role": "user", "content": prompts.SEMANTIC_REPAIR_USER.format(
+                interaction_type=interaction_type, 
+                html_snippet=html_snippet
+            )}
         ]
     }
 
@@ -96,7 +100,7 @@ async def classify_intent(urls_visited: List[str]) -> Dict[str, Any]:
     if not urls_visited:
         return {"status": "sem_dados"}
 
-    jornada_ideal = "Home -> Busca -> Produto -> Compra"
+    jornada_ideal = prompts.HAPPY_PATH_JOURNEY
     jornada_atual = " -> ".join(urls_visited)
 
     body = {
@@ -118,4 +122,4 @@ async def classify_intent(urls_visited: List[str]) -> Dict[str, Any]:
             "status": "Caminho Esperado" if similarity >= 0.5 else "Navegação Errática"
         }
     except Exception as e:
-        return {"error": str(e), "status": "erro_embedding"}
+        return {"error": str(e), "status": "Erro de embedding"}
