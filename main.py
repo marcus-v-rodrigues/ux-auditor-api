@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Carrega as variáveis de ambiente do arquivo .env
+# Inicialização do ambiente: Carrega tokens e URLs do arquivo .env
 load_dotenv()
 
 from models import AnalyzeRequest, InsightEvent
@@ -12,10 +12,11 @@ import semantic_engine
 
 app = FastAPI(
     title="UX Auditor API",
-    description="API para análise de usabilidade baseada em eventos rrweb, IA e Análise Semântica."
+    version="1.0.0",
+    description="Motor de Auditoria de UX baseado em IA Não Supervisionada e Análise Semântica (LLM)."
 )
 
-# Configuração de CORS
+# Configuração Global de CORS: Permite integração com frontends Next.js e extensões de browser
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,64 +27,80 @@ app.add_middleware(
 @app.post("/analyze", response_model=List[InsightEvent])
 async def analyze_session(request: AnalyzeRequest):
     """
-    Recebe uma lista de eventos do rrweb e processa para encontrar problemas de UX (IA e Regras).
+    Endpoint de Análise de Baixo Nível (Heurísticas + ML).
+    
+    Executa:
+    1. Isolation Forest para detectar anomalias em movimentos de mouse.
+    2. Heurística determinística para detecção de Rage Clicks.
+    Retorna uma lista cronológica de InsightEvents.
     """
     if not request.events:
         return []
         
     try:
-        # Executa as detecções (IA e Heurística)
+        # Detecção de anomalias comportamentais via Aprendizado de Máquina
         insights_ml = detect_behavioral_anomalies(request.events)
+        
+        # Detecção de frustração técnica via regras de clique
         insights_rule = detect_rage_clicks(request.events)
         
-        # Combina e ordena cronologicamente
+        # Consolidação dos resultados para o player de replay
         result = insights_ml + insights_rule
         result.sort(key=lambda x: x.timestamp)
         
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro no processamento: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @app.post("/analyze/semantic")
 async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
     """
-    Endpoint de Análise Semântica: Narrativa, Psicometria, Intenção e Self-Healing via Chutes AI.
+    Endpoint de Análise de Alto Nível (Inteligência Semântica).
+    
+    Orquestra múltiplas tarefas de NLP:
+    1. Geração de Narrativa (NLG).
+    2. Análise Psicométrica (Frustração e Carga Cognitiva).
+    3. Análise de Coerência de Jornada (Agnóstico ao Sistema).
+    4. Auto-correção de código (Self-Healing Contextual).
     """
     if not request.events:
-        raise HTTPException(status_code=400, detail="Nenhum evento fornecido.")
+        raise HTTPException(status_code=400, detail="No events provided.")
 
     try:
-        # 1. Narrativa (Síncrono) e Psicometria (Assíncrono)
+        # Fase 1: Transformação de logs técnicos em contexto qualitativo
         narrative = semantic_engine.generate_session_narrative(request.events)
+        
+        # Fase 2: Inferência de estados psicológicos via LLM
         psychometrics = await semantic_engine.analyze_psychometrics(narrative)
 
-        # 2. Análise de Coerência de Jornada (Assíncrono e Agnóstico)
+        # Fase 3: Avaliação semântica da progressão do usuário
         urls = [e.data.get('href') for e in request.events if e.type == 4 and e.data.get('href')]
         intent = await semantic_engine.analyze_journey_coherence(urls)
 
-        # 3. Self-Healing (Assíncrono)
+        # Fase 4: Identificação e reparo de elementos problemáticos (Self-Healing)
         rage_clicks = detect_rage_clicks(request.events)
         repairs = []
         if rage_clicks:
-            # Exemplo de snippet HTML para demonstração no MVP
-            example_html = "<div class='btn-submit'>Confirmar</div>"
+            # Em um cenário real, extrairíamos o HTML alvo do snapshot do rrweb
+            example_html = "<div class='btn-save'>Save Settings</div>"
             repair = await semantic_engine.semantic_code_repair(example_html, "click")
             repairs.append(repair)
 
         return {
             "narrative": narrative,
             "psychometric_analysis": psychometrics,
-            "intent_analysis": intent,
-            "self_healing": repairs,
+            "journey_analysis": intent,
+            "accessibility_repairs": repairs,
             "metadata": {
                 "event_count": len(request.events),
-                "has_rage_clicks": len(rage_clicks) > 0
+                "has_rage_clicks": len(rage_clicks) > 0,
+                "status": "success"
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro na análise semântica: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Semantic engine error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    # Inicia o servidor uvicorn quando executado diretamente
+    # Execução do servidor via Uvicorn em porta 8000
     uvicorn.run(app, host="0.0.0.0", port=8000)

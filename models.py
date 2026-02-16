@@ -3,14 +3,20 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 class BoundingBox(BaseModel):
-    """Representa a área retangular de um evento na tela."""
+    """
+    Representa as coordenadas espaciais de um evento na interface do usuário.
+    Utilizado para desenhar overlays no player de replay do frontend.
+    """
     top: float
     left: float
     width: float
     height: float
 
 class InsightEvent(BaseModel):
-    """Modelo de saída esperado pelo frontend para cada insight detectado."""
+    """
+    Modelo de saída unificado para insights de usabilidade.
+    Este objeto é o contrato principal entre o backend e o frontend Next.js.
+    """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: int
     type: str  # 'usability' | 'accessibility' | 'heuristic'
@@ -20,11 +26,17 @@ class InsightEvent(BaseModel):
     algorithm: Optional[str] = None
 
 class RRWebEvent(BaseModel):
-    """Modelo simplificado para eventos vindos do rrweb."""
+    """
+    Representa um evento bruto capturado pela biblioteca rrweb.
+    Contém snapshots do DOM, interações de mouse e metadados da sessão.
+    """
     type: int
     data: Dict[str, Any]
     timestamp: int
 
 class AnalyzeRequest(BaseModel):
-    """Payload de entrada para o endpoint de análise."""
+    """
+    Payload de entrada para processamento de sessões.
+    Recebe a lista completa de eventos gerados por uma gravação rrweb.
+    """
     events: List[RRWebEvent]
