@@ -3,8 +3,8 @@ import json
 import aiohttp
 import numpy as np
 from typing import List, Dict, Any
-from models import RRWebEvent
-import prompts
+from services.data_processor import UserAction
+from . import prompts
 
 # --- Configurações de Ambiente ---
 API_TOKEN: str = os.getenv("AI_API_TOKEN") or os.getenv("CHUTES_API_TOKEN") or ""
@@ -29,62 +29,41 @@ async def _post_ai_service(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
                 raise Exception(f"AI Service Error ({response.status}): {text}")
             return await response.json()
 
-def generate_session_narrative(events: List[RRWebEvent]) -> str:
+def generate_session_narrative(actions: List[UserAction]) -> str:
     """
     Motor de Geração de Linguagem Natural (NLG).
-    Transforma logs técnicos do rrweb em uma narrativa semântica rica.
+    Transforma ações processadas do usuário em uma narrativa semântica rica.
     
     Analisa:
     - Navegação (URLs)
-    - Interações explícitas (cliques, cliques duplos)
+    - Interações explícitas (cliques, inputs)
     - Hesitações (tempo de inatividade > 3s)
-    - Entradas de dados (inputs)
-    - Exploração de conteúdo (scrolls)
+    - Redimensionamento de viewport
     """
-    if not events: return "Nenhum evento encontrado."
+    if not actions: return "Nenhum evento encontrado."
 
     narrative = []
-    start_time = events[0].timestamp
+    start_time = actions[0].timestamp
     last_event_time = start_time
-    current_url = ""
     
-    for e in events:
-        time_offset = (e.timestamp - start_time) / 1000
-        idle_time = (e.timestamp - last_event_time) / 1000
+    for action in actions:
+        time_offset = (action.timestamp - start_time) / 1000
+        idle_time = (action.timestamp - last_event_time) / 1000
         
         # Detecção de Hesitação: indicador chave de Carga Cognitiva elevada
         if idle_time > 3.0:
             narrative.append(f"O usuário hesitou ou refletiu por {idle_time:.1f}s.")
 
-        if e.type == 4: # Meta Event (URL change)
-            new_url = e.data.get('href', 'página desconhecida')
-            if new_url != current_url:
-                current_url = new_url
-                narrative.append(f"Aos {time_offset:.1f}s, o usuário navegou para: {current_url}.")
+        if action.action_type == 'navigation':
+            narrative.append(f"Aos {time_offset:.1f}s, {action.details}")
+        elif action.action_type == 'click':
+            narrative.append(f"Aos {time_offset:.1f}s, clicou em {action.details}")
+        elif action.action_type == 'input':
+            narrative.append(f"Aos {time_offset:.1f}s, {action.details}")
+        elif action.action_type == 'resize':
+            narrative.append(f"Aos {time_offset:.1f}s, {action.details}")
 
-        elif e.type == 3: # Interação de evento
-            source = e.data.get('source')
-            if source == 2: # Interação de mouse
-                it_type = e.data.get('type')
-                node = e.data.get('node', {})
-                # Tradução de termos técnicos comuns para o contexto da narrativa
-                tag = node.get('tagName', 'elemento')
-                text = node.get('textContent', '').strip()[:40]
-                label = f"'{text}' ({tag})" if text else f"um {tag}"
-                
-                if it_type == 2: 
-                    narrative.append(f"Aos {time_offset:.1f}s, clicou em {label}.")
-                elif it_type == 4: 
-                    narrative.append(f"Aos {time_offset:.1f}s, realizou um clique duplo em {label}.")
-            
-            elif source == 5: # Interação de input
-                narrative.append(f"Aos {time_offset:.1f}s, o usuário começou a digitar ou interagir com um campo de formulário.")
-            
-            elif source == 3: # Interação de scroll
-                if not narrative or "rolar" not in narrative[-1]:
-                    narrative.append(f"Aos {time_offset:.1f}s, o usuário começou a rolar pelo conteúdo.")
-
-        last_event_time = e.timestamp
+        last_event_time = action.timestamp
 
     return " ".join(narrative)
 
