@@ -6,3 +6,8 @@ pydantic
 python-multipart
 aiohttp
 python-dotenv
+pyjwt[crypto]
+aio-pika
+pydantic-settings
+requests
+

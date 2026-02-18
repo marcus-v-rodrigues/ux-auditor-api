@@ -48,6 +48,20 @@ class SessionPreprocessor:
 
     @staticmethod
     def process(events: List[RRWebEvent]) -> ProcessedSession:
+        """
+        Processa uma lista de eventos brutos do rrweb em estruturas otimizadas para análise.
+        
+        Executa um único loop O(N) para extrair:
+        - Vetores cinemáticos (timestamp, x, y) para detecção de anomalias via ML
+        - Ações do usuário (cliques, inputs, navegação) para geração de narrativa via LLM
+        - Mapa DOM simplificado para contexto enriquecido das interações
+        
+        Args:
+            events (List[RRWebEvent]): Lista de eventos brutos capturados pelo rrweb.
+            
+        Returns:
+            ProcessedSession: Objeto contendo os dados processados organizados em buckets otimizados.
+        """
         if not events:
             return ProcessedSession(initial_timestamp=0, total_duration=0)
 

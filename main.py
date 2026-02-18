@@ -1,7 +1,14 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
+from datetime import datetime
+import uuid
+import json
+import aio_pika
+
+# Importação da Configuração
+from config import settings
 
 # Importação dos Modelos
 from models import AnalyzeRequest, InsightEvent
@@ -11,6 +18,8 @@ from services import detect_behavioral_anomalies, detect_rage_clicks
 import semantic
 # Importação do Processador de Dados Otimizado (Novo Módulo)
 from services import SessionPreprocessor
+# Importação do Módulo de Autenticação
+from services import get_current_user, TokenData
 
 # Inicialização da Aplicação
 app = FastAPI(
@@ -20,7 +29,7 @@ app = FastAPI(
 )
 
 # Configuração Global de CORS
-# Permite integração com frontends Next.js e extensões de browser
+# Permite integração com frontends Next.js e extensões de navegador
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,6 +37,86 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Pool de Conexões RabbitMQ
+class RabbitMQConnection:
+    """
+    Classe singleton para gerenciar conexão RabbitMQ.
+    Reutiliza a conexão entre requisições para melhor performance.
+    """
+    _instance = None
+    _connection = None
+    _channel = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    async def get_connection(self):
+        """
+        Obtém ou cria conexão RabbitMQ.
+        
+        Returns:
+            aio_pika.RobustConnection: Conexão RabbitMQ ativa
+        """
+        if self._connection is None or self._connection.is_closed:
+            self._connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
+        return self._connection
+
+    async def get_channel(self):
+        """
+        Obtém ou cria canal RabbitMQ.
+        
+        Returns:
+            aio_pika.RobustChannel: Canal RabbitMQ ativo
+        """
+        if self._channel is None or self._channel.is_closed:
+            connection = await self.get_connection()
+            self._channel = await connection.channel()
+            # Declara a fila
+            await self._channel.declare_queue(
+                settings.RABBITMQ_QUEUE,
+                durable=True
+            )
+        return self._channel
+
+    async def close(self):
+        """
+        Fecha conexão e canal RabbitMQ.
+        """
+        if self._channel and not self._channel.is_closed:
+            await self._channel.close()
+            self._channel = None
+        if self._connection and not self._connection.is_closed:
+            await self._connection.close()
+            self._connection = None
+
+
+# Instância global de conexão RabbitMQ
+rabbitmq = RabbitMQConnection()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Inicializa conexão RabbitMQ ao iniciar a aplicação.
+    """
+    try:
+        await rabbitmq.get_channel()
+        print(f"✓ Conectado ao RabbitMQ em {settings.RABBITMQ_URL}")
+    except Exception as e:
+        print(f"✗ Falha ao conectar ao RabbitMQ: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Fecha conexão RabbitMQ ao encerrar a aplicação.
+    """
+    await rabbitmq.close()
+    print("✓ Conexão RabbitMQ fechada")
 
 @app.post("/analyze", response_model=List[InsightEvent])
 async def analyze_session(request: AnalyzeRequest):
@@ -127,6 +216,79 @@ async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
         "suggested_repairs": repairs
     }
 
+
+@app.post("/ingest")
+async def ingest_session(
+    events: List[Dict[str, Any]],
+    current_user: TokenData = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Endpoint de Ingestão de Telemetria (Protegido por OAuth2).
+    
+    Recebe eventos de telemetria do rrweb e os envia para a fila RabbitMQ
+    para processamento assíncrono. Este endpoint é protegido por autenticação
+    OAuth2 - requer um token JWT válido emitido pelo janus-idp.
+    
+    Fluxo de Execução:
+    1. Valida o token JWT usando a dependência get_current_user
+    2. Gera um session_uuid único para esta ingestão
+    3. Envia os eventos para a fila RabbitMQ com metadados (user_id, session_uuid)
+    4. Retorna confirmação da ingestão
+    
+    Autenticação:
+    - Requer cabeçalho: Authorization: Bearer <JWT_TOKEN>
+    - Token deve ser emitido pelo janus-idp
+    - Token deve conter claims: sub (user_id), exp (expiration), iss (issuer)
+    
+    Args:
+        events: Lista de eventos de telemetria do rrweb (JSON)
+        current_user: TokenData extraído do JWT (injetado via dependência)
+        
+    Returns:
+        Dict com session_uuid e status da ingestão
+        
+    Raises:
+        HTTPException: 401 Unauthorized se token for inválido ou ausente
+        HTTPException: 500 Internal Server Error se falhar ao enviar para RabbitMQ
+    """
+    # Gera UUID único da sessão
+    session_uuid = str(uuid.uuid4())
+    
+    # Prepara payload da mensagem com metadados
+    message_payload = {
+        "user_id": current_user.user_id,
+        "session_uuid": session_uuid,
+        "events": events,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    
+    try:
+        # Obtém canal RabbitMQ
+        channel = await rabbitmq.get_channel()
+        
+        # Publica mensagem na fila
+        await channel.default_exchange.publish(
+            aio_pika.Message(
+                body=json.dumps(message_payload).encode('utf-8'),
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT
+            ),
+            routing_key=settings.RABBITMQ_QUEUE
+        )
+        
+        return {
+            "status": "success",
+            "message": "Eventos da sessão ingeridos com sucesso",
+            "session_uuid": session_uuid,
+            "user_id": current_user.user_id,
+            "events_count": len(events)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Falha ao ingerir eventos da sessão: {str(e)}"
+        )
+
 if __name__ == "__main__":
-    # Execução do servidor via Uvicorn na porta 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Execução do servidor via Uvicorn usando configurações do config.py
+    uvicorn.run(app, host=settings.APP_HOST, port=settings.APP_PORT)
