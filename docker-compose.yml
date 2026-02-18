@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # API FastAPI principal
+  api:
+    build: .
+    container_name: ux-auditor-api
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - rabbitmq
+    restart: unless-stopped
+    networks:
+      - ux-auditor-network
+
+  # Worker IO - Processo em background para consumir RabbitMQ e persistir no Garage
+  worker-io:
+    build: .
+    container_name: ux-auditor-worker-io
+    command: python worker_io.py
+    env_file:
+      - .env
+    depends_on:
+      - rabbitmq
+      - garage
+    restart: unless-stopped
+    networks:
+      - ux-auditor-network
+    # Adicione volumes se precisar persistir logs localmente
+    volumes:
+      - ./worker_io.log:/app/worker_io.log
+
+  # RabbitMQ - Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: ux-auditor-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    networks:
+      - ux-auditor-network
+
+  # Garage - S3-compatible Storage
+  garage:
+    image: dxflrs/garage:v1.0.1
+    container_name: ux-auditor-garage
+    command: ./garage server
+    ports:
+      - "3900:3900"  # S3 API port
+      - "3902:3902"  # Admin API port
+    environment:
+      RUST_LOG: "garage=info,garage_api=debug"
+    volumes:
+      - garage-data:/data
+    restart: unless-stopped
+    networks:
+      - ux-auditor-network
+
+networks:
+  ux-auditor-network:
+    driver: bridge
+
+volumes:
+  rabbitmq-data:
+    driver: local
+  garage-data:
+    driver: local

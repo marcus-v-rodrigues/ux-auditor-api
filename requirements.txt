@@ -10,4 +10,5 @@ pyjwt[crypto]
 aio-pika
 pydantic-settings
 requests
+aioboto3
 

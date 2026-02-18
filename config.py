@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
     RABBITMQ_QUEUE: str = "raw_sessions"
     
+    # Configuração S3/Garage (Storage)
+    GARAGE_ENDPOINT: str = "http://localhost:3900"
+    GARAGE_ACCESS_KEY: str = ""
+    GARAGE_SECRET_KEY: str = ""
+    GARAGE_BUCKET: str = "ux-auditor-sessions"
+    GARAGE_REGION: str = "us-east-1"
+    
     # Configuração da Aplicação
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
