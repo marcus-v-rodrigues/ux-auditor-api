@@ -65,3 +65,23 @@ class SessionProcessResponse(BaseModel):
     intent_analysis: Dict[str, Any]
     insights: List[Dict[str, Any]]
     stats: SessionProcessStats
+
+
+class RegisterRequest(BaseModel):
+    """
+    Payload para registro unificado de usuário.
+    Sincroniza usuário entre Janus IDP e UX Auditor API.
+    """
+    email: str
+    password: str
+    name: str
+
+
+class RegisterResponse(BaseModel):
+    """
+    Resposta do registro unificado de usuário.
+    """
+    id: str
+    email: str
+    name: str
+    message: str

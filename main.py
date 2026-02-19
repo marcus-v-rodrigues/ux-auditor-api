@@ -6,12 +6,13 @@ from datetime import datetime
 import uuid
 import json
 import aio_pika
+import requests
 
 # Importação da Configuração
 from config import settings
 
 # Importação dos Modelos
-from models import AnalyzeRequest, InsightEvent, RRWebEvent, SessionProcessResponse
+from models import AnalyzeRequest, InsightEvent, RRWebEvent, SessionProcessResponse, RegisterRequest, RegisterResponse
 # Importação dos Serviços de Lógica (ML e Heurísticas)
 from services import detect_behavioral_anomalies, detect_rage_clicks
 # Importação do Motor Semântico (LLM/NLP)
@@ -136,6 +137,142 @@ async def shutdown_event():
         print("✓ Conexão com o banco de dados fechada")
     except Exception as e:
         print(f"✗ Erro ao fechar conexão com o banco de dados: {e}")
+
+
+@app.post("/auth/register", response_model=RegisterResponse)
+async def register_user(request: RegisterRequest) -> RegisterResponse:
+    """
+    Endpoint de Registro Unificado (Público - Sem proteção de token).
+    
+    Sincroniza o usuário entre Janus IDP e UX Auditor API, garantindo que
+    o ID do usuário seja idêntico em ambos os sistemas para que o Token JWT
+    gerado pelo Janus funcione nas chaves estrangeiras do UX Auditor.
+    
+    Fluxo de Execução:
+    1. Valida o payload (email, password, name)
+    2. Passo A: Faz requisição HTTP POST para o Janus ('/api/users')
+       passando os dados e o header 'X-Service-Key'
+    3. Passo B: Se o Janus retornar sucesso (201/200), pega o 'id' (UUID) retornado
+    4. Passo C: Cria o usuário no banco local do UX Auditor (tabela 'User' do Prisma)
+       usando EXATAMENTE o mesmo 'id' retornado pelo Janus, o email e o nome
+    5. Passo D: Se falhar no banco local, tenta desfazer no Janus (opcional, ou apenas loga o erro crítico de desincronia)
+    
+    Args:
+        request (RegisterRequest): Payload contendo email, password e name
+        
+    Returns:
+        Dict com id, email, name e message de sucesso
+        
+    Raises:
+        HTTPException: 400 Bad Request se o payload for inválido
+        HTTPException: 500 Internal Server Error se falhar na sincronização com Janus
+        HTTPException: 500 Internal Server Error se falhar ao criar usuário no banco local
+    """
+    # Validação básica do payload
+    if not request.email or not request.password or not request.name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email, password and name are required"
+        )
+    
+    # Passo A: Faz requisição HTTP POST para o Janus
+    janus_url = f"{settings.JANUS_API_URL}/api/users"
+    janus_payload = {
+        "email": request.email,
+        "password": request.password,
+        "name": request.name
+    }
+    headers = {
+        "X-Service-Key": settings.JANUS_SERVICE_API_KEY,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        print(f"🔗 Sending registration request to Janus: {janus_url}")
+        janus_response = requests.post(
+            janus_url,
+            json=janus_payload,
+            headers=headers,
+            timeout=10
+        )
+        
+        # Verifica se a requisição foi bem-sucedida
+        if janus_response.status_code not in [200, 201]:
+            error_detail = janus_response.text
+            print(f"✗ Janus registration failed with status {janus_response.status_code}: {error_detail}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to register user in Janus: {error_detail}"
+            )
+        
+        # Passo B: Extrai o 'id' (UUID) retornado pelo Janus
+        janus_data = janus_response.json()
+        user_id = janus_data.get("id")
+        
+        if not user_id:
+            print(f"✗ Janus response missing 'id' field: {janus_data}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Janus response missing user ID"
+            )
+        
+        print(f"✓ User registered in Janus with ID: {user_id}")
+        
+    except requests.RequestException as e:
+        print(f"✗ Failed to connect to Janus service: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to connect to Janus service: {str(e)}"
+        )
+    
+    # Passo C: Cria o usuário no banco local do UX Auditor usando o mesmo ID
+    try:
+        print(f"💾 Creating user in local database with ID: {user_id}")
+        await db.user.create(
+            data={
+                "id": user_id,
+                "email": request.email,
+                "name": request.name
+            }
+        )
+        print(f"✓ User created in local database: {user_id}")
+        
+    except Exception as e:
+        # Passo D: Se falhar no banco local, tenta desfazer no Janus (opcional)
+        print(f"✗ CRITICAL: Failed to create user in local database: {str(e)}")
+        print(f"⚠️  Desynchronization detected! User exists in Janus but not in UX Auditor")
+        
+        # Tenta deletar o usuário do Janus para evitar desincronia
+        try:
+            delete_url = f"{settings.JANUS_API_URL}/api/users/{user_id}"
+            delete_headers = {
+                "X-Service-Key": settings.JANUS_SERVICE_API_KEY
+            }
+            delete_response = requests.delete(
+                delete_url,
+                headers=delete_headers,
+                timeout=10
+            )
+            if delete_response.status_code in [200, 204]:
+                print(f"✓ Rolled back user creation in Janus: {user_id}")
+            else:
+                print(f"⚠️  Failed to rollback user in Janus: {delete_response.status_code}")
+        except Exception as rollback_error:
+            print(f"⚠️  Failed to rollback user in Janus: {str(rollback_error)}")
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create user in local database: {str(e)}"
+        )
+    
+    # Retorna sucesso
+    return RegisterResponse(
+        id=user_id,
+        email=request.email,
+        name=request.name,
+        message="User registered successfully in both Janus and UX Auditor"
+    )
+
 
 @app.post("/analyze", response_model=List[InsightEvent])
 async def analyze_session(request: AnalyzeRequest):

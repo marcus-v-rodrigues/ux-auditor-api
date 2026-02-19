@@ -13,6 +13,7 @@ datasource db {
 model User {
   id        String   @id // UUID do Janus IDP (sincronização manual)
   email     String   @unique
+  name      String?
   createdAt DateTime @default(now())
 
   // Relações

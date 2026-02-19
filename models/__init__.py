@@ -5,7 +5,9 @@ from .models import (
     RRWebEvent, 
     AnalyzeRequest,
     SessionProcessStats,
-    SessionProcessResponse
+    SessionProcessResponse,
+    RegisterRequest,
+    RegisterResponse
 )
 
 __all__ = [
@@ -14,5 +16,7 @@ __all__ = [
     'RRWebEvent', 
     'AnalyzeRequest',
     'SessionProcessStats',
-    'SessionProcessResponse'
+    'SessionProcessResponse',
+    'RegisterRequest',
+    'RegisterResponse'
 ]

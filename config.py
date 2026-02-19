@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "RS256"
     JWT_ISSUER: Optional[str] = "janus-idp"
     
+    # Configuração do Janus Service (Sincronização de Usuários)
+    JANUS_API_URL: str = "http://janus-service:3001"
+    JANUS_SERVICE_API_KEY: str = ""
+    
     # Configuração RabbitMQ
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
     RABBITMQ_QUEUE: str = "raw_sessions"
