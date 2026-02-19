@@ -11,7 +11,7 @@ import aio_pika
 from config import settings
 
 # Importação dos Modelos
-from models import AnalyzeRequest, InsightEvent
+from models import AnalyzeRequest, InsightEvent, RRWebEvent, SessionProcessResponse
 # Importação dos Serviços de Lógica (ML e Heurísticas)
 from services import detect_behavioral_anomalies, detect_rage_clicks
 # Importação do Motor Semântico (LLM/NLP)
@@ -20,6 +20,10 @@ import semantic
 from services import SessionPreprocessor
 # Importação do Módulo de Autenticação
 from services import get_current_user, TokenData
+# Importação do Serviço de Storage (Garage)
+from services.storage import storage_service
+# Importação do Prisma Client
+from prisma import Prisma
 
 # Inicialização da Aplicação
 app = FastAPI(
@@ -97,26 +101,41 @@ class RabbitMQConnection:
 # Instância global de conexão RabbitMQ
 rabbitmq = RabbitMQConnection()
 
+# Instância global do Prisma Client
+db = Prisma()
+
 
 @app.on_event("startup")
 async def startup_event():
     """
-    Inicializa conexão RabbitMQ ao iniciar a aplicação.
+    Inicializa conexão RabbitMQ e Prisma Client ao iniciar a aplicação.
     """
     try:
         await rabbitmq.get_channel()
         print(f"✓ Conectado ao RabbitMQ em {settings.RABBITMQ_URL}")
     except Exception as e:
         print(f"✗ Falha ao conectar ao RabbitMQ: {e}")
+    
+    try:
+        await db.connect()
+        print("✓ Conectado ao banco de dados PostgreSQL via Prisma")
+    except Exception as e:
+        print(f"✗ Falha ao conectar ao banco de dados: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """
-    Fecha conexão RabbitMQ ao encerrar a aplicação.
+    Fecha conexão RabbitMQ e Prisma Client ao encerrar a aplicação.
     """
     await rabbitmq.close()
     print("✓ Conexão RabbitMQ fechada")
+    
+    try:
+        await db.disconnect()
+        print("✓ Conexão com o banco de dados fechada")
+    except Exception as e:
+        print(f"✗ Erro ao fechar conexão com o banco de dados: {e}")
 
 @app.post("/analyze", response_model=List[InsightEvent])
 async def analyze_session(request: AnalyzeRequest):
@@ -287,6 +306,202 @@ async def ingest_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Falha ao ingerir eventos da sessão: {str(e)}"
+        )
+
+
+@app.post("/sessions/{session_uuid}/process", response_model=SessionProcessResponse)
+async def process_session(
+    session_uuid: str,
+    current_user: TokenData = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Endpoint de Processamento de Sessão Completo (Protegido por OAuth2).
+    
+    Orquestra todo o pipeline de análise de UX para uma sessão específica:
+    1. Baixa os dados da sessão do Garage (S3)
+    2. Pré-processa os eventos brutos do rrweb
+    3. Executa análise de anomalias comportamentais (ML - Isolation Forest)
+    4. Detecta rage clicks (Heurística)
+    5. Gera narrativa da sessão (LLM - NLG)
+    6. Analisa psicométricas (LLM)
+    7. Analisa coerência da jornada (LLM + Embeddings)
+    8. Persiste todos os resultados no banco de dados (Prisma)
+    
+    Autenticação:
+    - Requer cabeçalho: Authorization: Bearer <JWT_TOKEN>
+    - Token deve ser emitido pelo janus-idp
+    - Token deve conter claims: sub (user_id), exp (expiration), iss (issuer)
+    
+    Args:
+        session_uuid: UUID da sessão a ser processada
+        current_user: TokenData extraído do JWT (injetado via dependência)
+        
+    Returns:
+        Dict contendo todos os resultados da análise:
+        - narrative: Narrativa textual da sessão
+        - psychometrics: Métricas psicométricas (frustração, carga cognitiva)
+        - intent_analysis: Análise de coerência da jornada
+        - insights: Lista de eventos de insight (anomalias, rage clicks)
+        - session_uuid: UUID da sessão processada
+        
+    Raises:
+        HTTPException: 401 Unauthorized se token for inválido ou ausente
+        HTTPException: 404 Not Found se sessão não for encontrada no Garage
+        HTTPException: 500 Internal Server Error se falhar no processamento
+    """
+    user_id = current_user.user_id
+    
+    # 1. Verifica ou cria o usuário no banco de dados local
+    try:
+        existing_user = await db.user.find_unique(
+            where={"id": user_id}
+        )
+        
+        if not existing_user:
+            # Cria o usuário se não existir
+            # Nota: O email pode não estar disponível no token, usamos um placeholder
+            await db.user.create(
+                data={
+                    "id": user_id,
+                    "email": f"{user_id}@janus-idp.local"
+                }
+            )
+            print(f"✓ Usuário {user_id} criado no banco de dados local")
+    except Exception as e:
+        print(f"✗ Erro ao verificar/criar usuário: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao gerenciar usuário: {str(e)}"
+        )
+    
+    # 2. Baixa os dados da sessão do Garage (S3)
+    try:
+        session_data = await storage_service.get_session_data(user_id, session_uuid)
+        print(f"✓ Dados da sessão {session_uuid} baixados do Garage")
+    except HTTPException as e:
+        # Repropaga exceções HTTP do StorageService
+        raise e
+    except Exception as e:
+        print(f"✗ Erro ao baixar sessão do Garage: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao acessar storage: {str(e)}"
+        )
+    
+    # 3. Converte o JSON bruto em objetos RRWebEvent
+    try:
+        raw_events = session_data.get("events", [])
+        rrweb_events = [
+            RRWebEvent(
+                type=event.get("type"),
+                data=event.get("data", {}),
+                timestamp=event.get("timestamp", 0)
+            )
+            for event in raw_events
+        ]
+        print(f"✓ {len(rrweb_events)} eventos RRWeb convertidos")
+    except Exception as e:
+        print(f"✗ Erro ao converter eventos RRWeb: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao processar eventos: {str(e)}"
+        )
+    
+    # 4. Executa o pipeline de análise
+    try:
+        # a) Pré-processamento dos eventos
+        processed = SessionPreprocessor.process(rrweb_events)
+        print(f"✓ Pré-processamento concluído: {len(processed.kinematics)} vetores, {len(processed.actions)} ações")
+        
+        # b) Detecção de anomalias comportamentais (ML - Isolation Forest)
+        insights_ml = detect_behavioral_anomalies(processed.kinematics)
+        print(f"✓ {len(insights_ml)} anomalias comportamentais detectadas")
+        
+        # c) Detecção de rage clicks (Heurística)
+        insights_rage = detect_rage_clicks(rrweb_events)
+        print(f"✓ {len(insights_rage)} rage clicks detectados")
+        
+        # d) Geração de narrativa da sessão (LLM - NLG)
+        narrative = semantic.generate_session_narrative(processed.actions)
+        print(f"✓ Narrativa gerada: {len(narrative)} caracteres")
+        
+        # e) Análise psicométrica (LLM)
+        psychometrics = await semantic.analyze_psychometrics(narrative)
+        print(f"✓ Análise psicométrica concluída")
+        
+        # f) Análise de coerência da jornada (LLM + Embeddings)
+        # Extrai URLs das ações de navegação
+        urls = [
+            action.details.replace("URL: ", "")
+            for action in processed.actions
+            if action.action_type == "navigation" and action.details
+        ]
+        intent_analysis = await semantic.analyze_journey_coherence(urls)
+        print(f"✓ Análise de coerência de jornada concluída")
+        
+        # Consolida todos os insights
+        all_insights = insights_ml + insights_rage
+        
+        # 5. Persiste os resultados no banco de dados
+        try:
+            # Verifica se já existe uma análise para esta sessão
+            existing_analysis = await db.sessionanalysis.find_unique(
+                where={"sessionUuid": session_uuid}
+            )
+            
+            if existing_analysis:
+                # Atualiza a análise existente
+                await db.sessionanalysis.update(
+                    where={"sessionUuid": session_uuid},
+                    data={
+                        "narrative": {"text": narrative},
+                        "psychometrics": psychometrics,
+                        "intentAnalysis": intent_analysis,
+                        "insights": [insight.dict() for insight in all_insights]
+                    }
+                )
+                print(f"✓ Análise da sessão {session_uuid} atualizada no banco de dados")
+            else:
+                # Cria uma nova análise
+                await db.sessionanalysis.create(
+                    data={
+                        "sessionUuid": session_uuid,
+                        "userId": user_id,
+                        "narrative": {"text": narrative},
+                        "psychometrics": psychometrics,
+                        "intentAnalysis": intent_analysis,
+                        "insights": [insight.dict() for insight in all_insights]
+                    }
+                )
+                print(f"✓ Análise da sessão {session_uuid} criada no banco de dados")
+                
+        except Exception as e:
+            print(f"✗ Erro ao persistir análise no banco de dados: {e}")
+            # Não falha a requisição se a persistência falhar, apenas loga o erro
+            
+        # 6. Retorna os resultados completos
+        from models.models import SessionProcessStats
+        return {
+            "session_uuid": session_uuid,
+            "user_id": user_id,
+            "narrative": narrative,
+            "psychometrics": psychometrics,
+            "intent_analysis": intent_analysis,
+            "insights": [insight.dict() for insight in all_insights],
+            "stats": SessionProcessStats(
+                total_events=len(rrweb_events),
+                kinematic_vectors=len(processed.kinematics),
+                user_actions=len(processed.actions),
+                ml_insights=len(insights_ml),
+                rage_clicks=len(insights_rage)
+            ).dict()
+        }
+        
+    except Exception as e:
+        print(f"✗ Erro no pipeline de análise: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao processar sessão: {str(e)}"
         )
 
 if __name__ == "__main__":

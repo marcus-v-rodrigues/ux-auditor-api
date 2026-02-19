@@ -40,3 +40,28 @@ class AnalyzeRequest(BaseModel):
     Recebe a lista completa de eventos gerados por uma gravação rrweb.
     """
     events: List[RRWebEvent]
+
+
+class SessionProcessStats(BaseModel):
+    """
+    Estatísticas do processamento de sessão.
+    """
+    total_events: int
+    kinematic_vectors: int
+    user_actions: int
+    ml_insights: int
+    rage_clicks: int
+
+
+class SessionProcessResponse(BaseModel):
+    """
+    Resposta completa do processamento de sessão.
+    Contém todos os resultados da análise de UX.
+    """
+    session_uuid: str
+    user_id: str
+    narrative: str
+    psychometrics: Dict[str, Any]
+    intent_analysis: Dict[str, Any]
+    insights: List[Dict[str, Any]]
+    stats: SessionProcessStats
