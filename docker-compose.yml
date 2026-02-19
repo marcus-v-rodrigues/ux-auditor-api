@@ -48,7 +48,7 @@ services:
     image: postgres:15-alpine
     container_name: ux_auditor_api_db
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "5433:${POSTGRES_PORT:-5432}"
     env_file:
       - .env
     volumes:
@@ -63,6 +63,9 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     container_name: ux_auditor_rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBIT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBIT_PASS}
     ports:
       - "5672:5672"    # Porta AMQP
       - "15672:15672"  # Interface de gerenciamento

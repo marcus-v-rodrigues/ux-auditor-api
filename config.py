@@ -3,6 +3,7 @@ Módulo de configuração da UX Auditor API.
 Centraliza variáveis de ambiente usando pydantic-settings.
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import computed_field
 from typing import Optional
 
 
@@ -16,14 +17,24 @@ class Settings(BaseSettings):
     AUTH_JWKS_URL: Optional[str] = None
     JWT_PUBLIC_KEY: Optional[str] = None
     JWT_ALGORITHM: str = "RS256"
-    AUTH_ISSUER_URL: Optional[str] = "janus-idp"
+    AUTH_ISSUER_URL: Optional[str] = "http://localhost:3000/oidc"
     
     # Configuração do Janus Service (Sincronização de Usuários)
     JANUS_API_URL: str = "http://janus-service:3001"
     JANUS_SERVICE_API_KEY: str = ""
     
     # Configuração RabbitMQ
-    RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
+    # --- Variáveis soltas do RabbitMQ (Vêm do .env) ---
+    RABBIT_USER: str = "guest"
+    RABBIT_PASS: str = "guest"
+    RABBIT_HOST: str = "ux_auditor_rabbitmq"
+    RABBIT_PORT: int = 5672
+
+    # --- Montagem automática da URL ---
+    @computed_field
+    @property
+    def RABBITMQ_URL(self) -> str:
+        return f"amqp://{self.RABBIT_USER}:{self.RABBIT_PASS}@{self.RABBIT_HOST}:{self.RABBIT_PORT}/"
     RABBITMQ_QUEUE: str = "raw_sessions"
     
     # Configuração S3/Garage (Storage)
