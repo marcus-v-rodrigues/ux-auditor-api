@@ -75,7 +75,7 @@ def get_jwks_public_key(token: str) -> str:
     else:
         # Busca JWKS do endpoint
         try:
-            response = requests.get(settings.JWT_JWKS_URL, timeout=5)
+            response = requests.get(settings.AUTH_JWKS_URL, timeout=5)
             response.raise_for_status()
             jwks = response.json()
             _jwks_cache = jwks
@@ -125,14 +125,14 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
     """
     try:
         # Determina a chave pública a ser usada
-        if settings.JWT_JWKS_URL:
+        if settings.AUTH_JWKS_URL:
             # Usa JWKS endpoint para obter chave pública dinamicamente
             public_key = get_jwks_public_key(token)
             payload = jwt.decode(
                 token,
                 key=public_key,
                 algorithms=[settings.JWT_ALGORITHM],
-                issuer=settings.JWT_ISSUER,
+                issuer=settings.AUTH_ISSUER_URL,
                 options={
                     'verify_signature': True,
                     'verify_exp': True,
@@ -145,7 +145,7 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
                 token,
                 key=settings.JWT_PUBLIC_KEY,
                 algorithms=[settings.JWT_ALGORITHM],
-                issuer=settings.JWT_ISSUER,
+                issuer=settings.AUTH_ISSUER_URL,
                 options={
                     'verify_signature': True,
                     'verify_exp': True,
@@ -155,7 +155,7 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="JWT_JWKS_URL ou JWT_PUBLIC_KEY deve ser configurado",
+                detail="AUTH_JWKS_URL ou JWT_PUBLIC_KEY deve ser configurado",
             )
         
         return payload
@@ -175,7 +175,7 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
     except jwt.InvalidIssuerError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Emissor do token inválido. Esperado: {settings.JWT_ISSUER}",
+            detail=f"Emissor do token inválido. Esperado: {settings.AUTH_ISSUER_URL}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidTokenError as e:
@@ -234,10 +234,10 @@ def validate_token_payload(payload: Dict[str, Any]) -> TokenData:
     
     # Extrai o emissor (iss) - opcional mas deve corresponder ao emissor esperado
     iss: Optional[str] = payload.get("iss")
-    if settings.JWT_ISSUER and iss != settings.JWT_ISSUER:
+    if settings.AUTH_ISSUER_URL and iss != settings.AUTH_ISSUER_URL:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Emissor do token incorreto. Esperado: {settings.JWT_ISSUER}, Recebido: {iss}",
+            detail=f"Emissor do token incorreto. Esperado: {settings.AUTH_ISSUER_URL}, Recebido: {iss}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     

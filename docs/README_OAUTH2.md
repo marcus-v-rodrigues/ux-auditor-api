@@ -54,10 +54,10 @@ Fornece validação de token OAuth2 com RS256 e suporte a JWKS:
 
 Configuração centralizada usando `pydantic-settings`:
 
-- **JWT_JWKS_URL**: URL do endpoint JWKS para validação dinâmica
+- **AUTH_JWKS_URL**: URL do endpoint JWKS para validação dinâmica
 - **JWT_PUBLIC_KEY**: Chave pública estática (alternativa ao JWKS)
 - **JWT_ALGORITHM**: Algoritmo de assinatura (RS256 para Janus)
-- **JWT_ISSUER**: Emissor esperado (URL do realm Janus)
+- **AUTH_ISSUER_URL**: Emissor esperado (URL do realm Janus)
 - **RABBITMQ_URL**: String de conexão RabbitMQ
 - **RABBITMQ_QUEUE**: Nome da fila para sessões brutas
 
@@ -92,13 +92,13 @@ Edite `.env` com sua configuração:
 
 ```env
 # URL do endpoint JWKS do Janus
-JWT_JWKS_URL=https://seu-janus-idp.com/realms/master/protocol/openid-connect/certs
+AUTH_JWKS_URL=https://seu-janus-idp.com/realms/master/protocol/openid-connect/certs
 
 # Algoritmo JWT
 JWT_ALGORITHM=RS256
 
 # Emissor JWT (URL do realm)
-JWT_ISSUER=https://seu-janus-idp.com/realms/master
+AUTH_ISSUER_URL=https://seu-janus-idp.com/realms/master
 
 # Configuração RabbitMQ
 RABBITMQ_URL=amqp://guest:guest@localhost:5672/
@@ -121,7 +121,7 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
 JWT_ALGORITHM=RS256
 
 # Emissor JWT
-JWT_ISSUER=https://seu-janus-idp.com/realms/master
+AUTH_ISSUER_URL=https://seu-janus-idp.com/realms/master
 
 # Configuração RabbitMQ
 RABBITMQ_URL=amqp://guest:guest@localhost:5672/
@@ -254,7 +254,7 @@ A API valida os seguintes claims JWT:
 |-------|-------------|-----------|
 | `sub` | Sim | ID do usuário (subject) |
 | `exp` | Sim | Timestamp de expiração (epoch Unix) |
-| `iss` | Sim | Emissor (deve corresponder a `JWT_ISSUER`) |
+| `iss` | Sim | Emissor (deve corresponder a `AUTH_ISSUER_URL`) |
 | `kid` | Sim (JWKS) | Key ID para identificar a chave pública |
 
 ### Exemplo de Estrutura de Token
@@ -399,8 +399,8 @@ A API imprime mensagens de conexão ao RabbitMQ no startup:
 
 ### Erros de Token Inválido
 
-- Verifique se `JWT_JWKS_URL` ou `JWT_PUBLIC_KEY` está configurado
-- Verifique se `JWT_ISSUER` corresponde ao emissor do token
+- Verifique se `AUTH_JWKS_URL` ou `JWT_PUBLIC_KEY` está configurado
+- Verifique se `AUTH_ISSUER_URL` corresponde ao emissor do token
 - Verifique a expiração do token
 - Teste a URL do JWKS diretamente no navegador
 

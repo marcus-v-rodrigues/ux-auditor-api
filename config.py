@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     
     # Configuração JWT (RS256 - Assimétrico)
     # Use JWKS_URL para validação dinâmica ou JWT_PUBLIC_KEY para chave estática
-    JWT_JWKS_URL: Optional[str] = None
+    AUTH_JWKS_URL: Optional[str] = None
     JWT_PUBLIC_KEY: Optional[str] = None
     JWT_ALGORITHM: str = "RS256"
-    JWT_ISSUER: Optional[str] = "janus-idp"
+    AUTH_ISSUER_URL: Optional[str] = "janus-idp"
     
     # Configuração do Janus Service (Sincronização de Usuários)
     JANUS_API_URL: str = "http://janus-service:3001"
