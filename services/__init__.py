@@ -3,6 +3,7 @@ from .data_processor import SessionPreprocessor, KinematicVector, UserAction, Pr
 from .ml_analyzer import detect_behavioral_anomalies
 from .heuristic_analyzer import detect_rage_clicks
 from .auth import get_current_user, get_current_user_optional, TokenData
+from .storage import StorageService, storage_service
 
 __all__ = [
     'SessionPreprocessor',
@@ -13,5 +14,7 @@ __all__ = [
     'detect_rage_clicks',
     'get_current_user',
     'get_current_user_optional',
-    'TokenData'
+    'TokenData',
+    'StorageService',
+    'storage_service'
 ]
