@@ -23,3 +23,7 @@ env/
 dist/
 build/
 *.egg-info/
+
+# Prisma
+prisma/migrations/
+node_modules/

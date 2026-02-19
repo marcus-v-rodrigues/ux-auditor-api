@@ -11,4 +11,5 @@ aio-pika
 pydantic-settings
 requests
 aioboto3
+prisma
 

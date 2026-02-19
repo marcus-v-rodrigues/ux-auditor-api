@@ -12,6 +12,7 @@ services:
       - .env
     depends_on:
       - rabbitmq
+      - ux-auditor-api-db
     restart: unless-stopped
     networks:
       - ux-auditor-network
@@ -38,8 +39,8 @@ services:
     image: rabbitmq:3-management
     container_name: ux-auditor-rabbitmq
     ports:
-      - "5672:5672"    # AMQP port
-      - "15672:15672"  # Management UI
+      - "5672:5672"    # Porta AMQP
+      - "15672:15672"  # Interface de gerenciamento
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -49,18 +50,34 @@ services:
     networks:
       - ux-auditor-network
 
-  # Garage - S3-compatible Storage
+  # Garage - Storage compatível com S3
   garage:
     image: dxflrs/garage:v1.0.1
     container_name: ux-auditor-garage
     command: ./garage server
     ports:
-      - "3900:3900"  # S3 API port
-      - "3902:3902"  # Admin API port
+      - "3900:3900"  # Porta da API S3
+      - "3902:3902"  # Porta da API de administração
     environment:
       RUST_LOG: "garage=info,garage_api=debug"
     volumes:
       - garage-data:/data
+    restart: unless-stopped
+    networks:
+      - ux-auditor-network
+
+  # PostgreSQL - Banco de dados dedicado para a API UX Auditor
+  ux-auditor-api-db:
+    image: postgres:15-alpine
+    container_name: ux-auditor-api-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - api_postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     networks:
       - ux-auditor-network
@@ -73,4 +90,6 @@ volumes:
   rabbitmq-data:
     driver: local
   garage-data:
+    driver: local
+  api_postgres_data:
     driver: local
