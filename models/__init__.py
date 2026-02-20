@@ -1,4 +1,5 @@
 # Models package
+# Modelos Pydantic para validação de API
 from .models import (
     BoundingBox, 
     InsightEvent, 
@@ -7,10 +8,14 @@ from .models import (
     SessionProcessStats,
     SessionProcessResponse,
     RegisterRequest,
-    RegisterResponse
+    RegisterResponse,
+    # Modelos SQLModel (ORM)
+    User,
+    SessionAnalysis
 )
 
 __all__ = [
+    # Pydantic models
     'BoundingBox', 
     'InsightEvent', 
     'RRWebEvent', 
@@ -18,5 +23,8 @@ __all__ = [
     'SessionProcessStats',
     'SessionProcessResponse',
     'RegisterRequest',
-    'RegisterResponse'
+    'RegisterResponse',
+    # SQLModel table models
+    'User',
+    'SessionAnalysis'
 ]

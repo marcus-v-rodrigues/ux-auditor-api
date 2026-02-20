@@ -11,5 +11,5 @@ aio-pika
 pydantic-settings
 requests
 aioboto3
-prisma
-
+sqlmodel
+psycopg2-binary

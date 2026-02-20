@@ -13,6 +13,7 @@ from config import settings
 
 # Importação dos Modelos
 from models import AnalyzeRequest, InsightEvent, RRWebEvent, SessionProcessResponse, RegisterRequest, RegisterResponse
+from models.models import User, SessionAnalysis
 # Importação dos Serviços de Lógica (ML e Heurísticas)
 from services import detect_behavioral_anomalies, detect_rage_clicks
 # Importação do Motor Semântico (LLM/NLP)
@@ -23,8 +24,9 @@ from services import SessionPreprocessor
 from services import get_current_user, TokenData
 # Importação do Serviço de Storage (Garage)
 from services.storage import storage_service
-# Importação do Prisma Client
-from prisma import Prisma
+# Importação do Banco de Dados (SQLModel)
+from database import engine, get_session, init_db
+from sqlmodel import Session as DBSession, select
 
 # Inicialização da Aplicação
 app = FastAPI(
@@ -102,14 +104,11 @@ class RabbitMQConnection:
 # Instância global de conexão RabbitMQ
 rabbitmq = RabbitMQConnection()
 
-# Instância global do Prisma Client
-db = Prisma()
-
 
 @app.on_event("startup")
 async def startup_event():
     """
-    Inicializa conexão RabbitMQ e Prisma Client ao iniciar a aplicação.
+    Inicializa conexão RabbitMQ e banco de dados SQLModel ao iniciar a aplicação.
     """
     try:
         await rabbitmq.get_channel()
@@ -118,8 +117,9 @@ async def startup_event():
         print(f"✗ Falha ao conectar ao RabbitMQ: {e}")
     
     try:
-        await db.connect()
-        print("✓ Conectado ao banco de dados PostgreSQL via Prisma")
+        # Inicializa o banco de dados SQLModel
+        init_db()
+        print("✓ Conectado ao banco de dados PostgreSQL via SQLModel")
     except Exception as e:
         print(f"✗ Falha ao conectar ao banco de dados: {e}")
 
@@ -127,20 +127,17 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """
-    Fecha conexão RabbitMQ e Prisma Client ao encerrar a aplicação.
+    Fecha conexão RabbitMQ ao encerrar a aplicação.
     """
     await rabbitmq.close()
     print("✓ Conexão RabbitMQ fechada")
-    
-    try:
-        await db.disconnect()
-        print("✓ Conexão com o banco de dados fechada")
-    except Exception as e:
-        print(f"✗ Erro ao fechar conexão com o banco de dados: {e}")
 
 
 @app.post("/auth/register", response_model=RegisterResponse)
-async def register_user(request: RegisterRequest) -> RegisterResponse:
+async def register_user(
+    request: RegisterRequest,
+    session: DBSession = Depends(get_session)
+) -> RegisterResponse:
     """
     Endpoint de Registro Unificado (Público - Sem proteção de token).
     
@@ -153,12 +150,13 @@ async def register_user(request: RegisterRequest) -> RegisterResponse:
     2. Passo A: Faz requisição HTTP POST para o Janus ('/api/users')
        passando os dados e o header 'X-Service-Key'
     3. Passo B: Se o Janus retornar sucesso (201/200), pega o 'id' (UUID) retornado
-    4. Passo C: Cria o usuário no banco local do UX Auditor (tabela 'User' do Prisma)
+    4. Passo C: Cria o usuário no banco local do UX Auditor (tabela 'users')
        usando EXATAMENTE o mesmo 'id' retornado pelo Janus, o email e o nome
     5. Passo D: Se falhar no banco local, tenta desfazer no Janus (opcional, ou apenas loga o erro crítico de desincronia)
     
     Args:
         request (RegisterRequest): Payload contendo email, password e name
+        session (DBSession): Sessão do banco de dados (injetada via dependência)
         
     Returns:
         Dict com id, email, name e message de sucesso
@@ -228,14 +226,21 @@ async def register_user(request: RegisterRequest) -> RegisterResponse:
     # Passo C: Cria o usuário no banco local do UX Auditor usando o mesmo ID
     try:
         print(f"💾 Creating user in local database with ID: {user_id}")
-        await db.user.create(
-            data={
-                "id": user_id,
-                "email": request.email,
-                "name": request.name
-            }
-        )
-        print(f"✓ User created in local database: {user_id}")
+        
+        # Verifica se o usuário já existe
+        existing_user = session.get(User, user_id)
+        if existing_user:
+            print(f"⚠️ User already exists in local database: {user_id}")
+        else:
+            # Cria novo usuário
+            new_user = User(
+                id=user_id,
+                email=request.email,
+                name=request.name
+            )
+            session.add(new_user)
+            session.commit()
+            print(f"✓ User created in local database: {user_id}")
         
     except Exception as e:
         # Passo D: Se falhar no banco local, tenta desfazer no Janus (opcional)
@@ -449,7 +454,8 @@ async def ingest_session(
 @app.post("/sessions/{session_uuid}/process", response_model=SessionProcessResponse)
 async def process_session(
     session_uuid: str,
-    current_user: TokenData = Depends(get_current_user)
+    current_user: TokenData = Depends(get_current_user),
+    session: DBSession = Depends(get_session)
 ) -> Dict[str, Any]:
     """
     Endpoint de Processamento de Sessão Completo (Protegido por OAuth2).
@@ -462,7 +468,7 @@ async def process_session(
     5. Gera narrativa da sessão (LLM - NLG)
     6. Analisa psicométricas (LLM)
     7. Analisa coerência da jornada (LLM + Embeddings)
-    8. Persiste todos os resultados no banco de dados (Prisma)
+    8. Persiste todos os resultados no banco de dados (SQLModel)
     
     Autenticação:
     - Requer cabeçalho: Authorization: Bearer <JWT_TOKEN>
@@ -472,6 +478,7 @@ async def process_session(
     Args:
         session_uuid: UUID da sessão a ser processada
         current_user: TokenData extraído do JWT (injetado via dependência)
+        session: Sessão do banco de dados (injetada via dependência)
         
     Returns:
         Dict contendo todos os resultados da análise:
@@ -490,19 +497,17 @@ async def process_session(
     
     # 1. Verifica ou cria o usuário no banco de dados local
     try:
-        existing_user = await db.user.find_unique(
-            where={"id": user_id}
-        )
+        existing_user = session.get(User, user_id)
         
         if not existing_user:
             # Cria o usuário se não existir
             # Nota: O email pode não estar disponível no token, usamos um placeholder
-            await db.user.create(
-                data={
-                    "id": user_id,
-                    "email": f"{user_id}@janus-idp.local"
-                }
+            new_user = User(
+                id=user_id,
+                email=f"{user_id}@janus-idp.local"
             )
+            session.add(new_user)
+            session.commit()
             print(f"✓ Usuário {user_id} criado no banco de dados local")
     except Exception as e:
         print(f"✗ Erro ao verificar/criar usuário: {e}")
@@ -581,35 +586,31 @@ async def process_session(
         
         # 5. Persiste os resultados no banco de dados
         try:
-            # Verifica se já existe uma análise para esta sessão
-            existing_analysis = await db.sessionanalysis.find_unique(
-                where={"sessionUuid": session_uuid}
-            )
+            # Busca análise existente por session_uuid
+            statement = select(SessionAnalysis).where(SessionAnalysis.session_uuid == session_uuid)
+            existing_analysis = session.exec(statement).first()
             
             if existing_analysis:
                 # Atualiza a análise existente
-                await db.sessionanalysis.update(
-                    where={"sessionUuid": session_uuid},
-                    data={
-                        "narrative": {"text": narrative},
-                        "psychometrics": psychometrics,
-                        "intentAnalysis": intent_analysis,
-                        "insights": [insight.dict() for insight in all_insights]
-                    }
-                )
+                existing_analysis.narrative = {"text": narrative}
+                existing_analysis.psychometrics = psychometrics
+                existing_analysis.intent_analysis = intent_analysis
+                existing_analysis.insights = [insight.dict() for insight in all_insights]
+                session.add(existing_analysis)
+                session.commit()
                 print(f"✓ Análise da sessão {session_uuid} atualizada no banco de dados")
             else:
                 # Cria uma nova análise
-                await db.sessionanalysis.create(
-                    data={
-                        "sessionUuid": session_uuid,
-                        "userId": user_id,
-                        "narrative": {"text": narrative},
-                        "psychometrics": psychometrics,
-                        "intentAnalysis": intent_analysis,
-                        "insights": [insight.dict() for insight in all_insights]
-                    }
+                new_analysis = SessionAnalysis(
+                    session_uuid=session_uuid,
+                    user_id=user_id,
+                    narrative={"text": narrative},
+                    psychometrics=psychometrics,
+                    intent_analysis=intent_analysis,
+                    insights=[insight.dict() for insight in all_insights]
                 )
+                session.add(new_analysis)
+                session.commit()
                 print(f"✓ Análise da sessão {session_uuid} criada no banco de dados")
                 
         except Exception as e:
