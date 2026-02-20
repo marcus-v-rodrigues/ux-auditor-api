@@ -3,8 +3,9 @@ Módulo de configuração da UX Auditor API.
 Centraliza variáveis de ambiente usando pydantic-settings.
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import computed_field
+from pydantic import computed_field, field_validator
 from typing import Optional
+import base64
 
 
 class Settings(BaseSettings):
@@ -47,6 +48,38 @@ class Settings(BaseSettings):
     # Configuração da Aplicação
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
+    
+    @field_validator('JWT_PUBLIC_KEY', mode='before')
+    @classmethod
+    def decode_base64_public_key(cls, v: Optional[str]) -> Optional[str]:
+        """
+        Decodifica a chave pública JWT de Base64 se necessário.
+        
+        A chave pode ser fornecida:
+        1. Em formato PEM direto (começa com '-----BEGIN')
+        2. Codificada em Base64 (sem prefixo PEM)
+        
+        Args:
+            v: Valor da variável JWT_PUBLIC_KEY do .env
+            
+        Returns:
+            Chave pública em formato PEM, ou None se não configurada
+        """
+        if v is None or v == "":
+            return None
+        
+        v = v.strip()
+        
+        # Se já está em formato PEM, retorna como está
+        if v.startswith('-----BEGIN'):
+            return v
+        
+        # Caso contrário, decodifica de Base64
+        try:
+            decoded_bytes = base64.b64decode(v)
+            return decoded_bytes.decode('utf-8')
+        except Exception as e:
+            raise ValueError(f"Falha ao decodificar JWT_PUBLIC_KEY de Base64: {str(e)}")
     
     model_config = SettingsConfigDict(
         env_file=".env",
