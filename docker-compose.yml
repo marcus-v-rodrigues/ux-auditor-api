@@ -16,9 +16,15 @@ services:
     env_file:
       - .env
     depends_on:
-      - rabbitmq
-      - ux-auditor-api-db
-
+      rabbitmq:
+        condition: service_started
+      ux-auditor-api-db:
+        condition: service_started
+      garage:
+        condition: service_healthy  # O Docker espera o healthcheck do Garage passar
+    volumes:
+      # Volume compartilhado para credenciais dinâmicas do Garage (read-only)
+      - garage_secrets:/secrets:ro
     restart: unless-stopped
     networks:
       - ux_auditor_network
@@ -32,8 +38,13 @@ services:
     env_file:
       - .env
     depends_on:
-      - rabbitmq
-      - garage
+      rabbitmq:
+        condition: service_started
+      garage:
+        condition: service_healthy # Garante que o wrapper.sh já gerou as chaves
+    volumes:
+      # Volume compartilhado para credenciais dinâmicas do Garage (read-only)
+      - garage_secrets:/secrets:ro
     restart: unless-stopped
     networks:
       - ux_auditor_network
@@ -77,18 +88,35 @@ services:
     networks:
       - ux_auditor_network
 
-  # Garage - Storage compatível com S3
-  # Solução de armazenamento de objetos leve e eficiente
+  # ===========================================
+  # GARAGE - STORAGE COMPATÍVEL COM S3
+  # ===========================================
+
+  # Garage - Serviço de armazenamento S3-compatible
+  # Utiliza wrapper para gerar credenciais dinâmicas na inicialização
   garage:
-    image: dxflrs/garage:v1.0.1
+    image: dxflrs/garage:v1.3.1
     container_name: ux_garage
-    command: ./garage server
+    # Wrapper script que inicia o Garage e provisiona credenciais dinamicamente
+    command: /scripts/garage-wrapper.sh
     ports:
-      - "3900:3900"
+      - "3900:3900"  # API S3
+      - "3901:3901"  # RPC interno
     env_file:
       - .env
     volumes:
       - ux_auditor_garage_data:/data
+      # Script wrapper para inicialização com geração de credenciais
+      - ./scripts/garage-wrapper.sh:/scripts/garage-wrapper.sh:ro
+      # Volume compartilhado para credenciais geradas dinamicamente
+      - garage_secrets:/secrets
+    # Healthcheck para verificar se o Garage está pronto
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3900/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
     networks:
       - ux_auditor_network
@@ -114,4 +142,8 @@ volumes:
   ux_auditor_rabbitmq_data:
     driver: local
   ux_auditor_garage_data:
+    driver: local
+  # Volume compartilhado para credenciais dinâmicas do Garage
+  # O Garage gera as credenciais e a API/Worker as consome
+  garage_secrets:
     driver: local

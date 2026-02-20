@@ -1,16 +1,46 @@
 """
 Módulo de configuração da UX Auditor API.
 Centraliza variáveis de ambiente usando pydantic-settings.
+
+IMPORTANTE: Carrega credenciais dinâmicas do Garage do arquivo /secrets/garage.env
+quando disponível, permitindo injeção automática de credenciais geradas pelo Garage.
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import computed_field, field_validator
 from typing import Optional
+from pathlib import Path
 import base64
+import os
+
+
+# ===========================================
+# Carregamento de Credenciais Dinâmicas do Garage
+# ===========================================
+# O Garage gera credenciais dinamicamente na inicialização e as salva
+# em /secrets/garage.env. Este código carrega essas credenciais ANTES
+# de instanciar o Settings, garantindo que o Pydantic Settings utilize
+# as chaves frescas geradas pelo Garage.
+
+SECRETS_FILE = Path("/secrets/garage.env")
+
+if SECRETS_FILE.exists():
+    from dotenv import load_dotenv
+    
+    # Carrega o arquivo de secrets com override=True para sobrescrever
+    # quaisquer valores vazios ou antigos do .env local
+    load_dotenv(SECRETS_FILE, override=True)
+    
+    # Log para debug (apenas em desenvolvimento)
+    if os.getenv("DEBUG", "false").lower() == "true":
+        print(f"🔐 Credenciais do Garage carregadas de: {SECRETS_FILE}")
 
 
 class Settings(BaseSettings):
     """
     Configurações da aplicação carregadas de variáveis de ambiente.
+    
+    As credenciais do Garage (GARAGE_ACCESS_KEY, GARAGE_SECRET_KEY) são
+    carregadas dinamicamente do arquivo /secrets/garage.env quando disponível.
     """
     
     # Configuração JWT (RS256 - Assimétrico)
@@ -39,6 +69,7 @@ class Settings(BaseSettings):
     RABBITMQ_QUEUE: str = "raw_sessions"
     
     # Configuração S3/Garage (Storage)
+    # As credenciais são injetadas dinamicamente via /secrets/garage.env
     GARAGE_ENDPOINT: str = "http://localhost:3900"
     GARAGE_ACCESS_KEY: str = ""
     GARAGE_SECRET_KEY: str = ""
@@ -89,4 +120,5 @@ class Settings(BaseSettings):
 
 
 # Instância global de configurações
+# As credenciais do Garage já foram carregadas acima via load_dotenv
 settings = Settings()
