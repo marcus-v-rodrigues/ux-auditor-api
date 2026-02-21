@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Worker IO - Processo em background para consumir mensagens do RabbitMQ
-e persisti-las no Garage (S3-compatible storage).
+e persisti-las no MinIO (S3-compatible storage).
 
 Este worker implementa o padrão at-least-once delivery, garantindo que
 as mensagens sejam processadas mesmo em caso de falhas temporárias.
@@ -33,9 +33,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class GarageStorageClient:
+class MinIOStorageClient:
     """
-    Cliente assíncrono para interação com o Garage (S3-compatible storage).
+    Cliente assíncrono para interação com o MinIO (S3-compatible storage).
     """
 
     def __init__(
@@ -52,30 +52,36 @@ class GarageStorageClient:
         self.bucket_name = bucket_name
         self.region = region
         self._session: Optional[aioboto3.Session] = None
-        self._client = None
+        self._client_cm = None  # Context manager
+        self._client = None  # Actual client
 
     async def __aenter__(self):
         """Context manager entry para criar a sessão S3."""
-        self._session = aioboto3.Session()
+        self._session = aioboto3.Session(
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
+            region_name=self.region
+        )
+        # Create the client context manager and enter it
+        self._client_cm = self._session.client(
+            's3',
+            endpoint_url=self.endpoint_url
+        )
+        self._client = await self._client_cm.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit para limpar recursos."""
-        if self._client:
-            await self._client.__aexit__(exc_type, exc_val, exc_tb)
+        if self._client_cm:
+            await self._client_cm.__aexit__(exc_type, exc_val, exc_tb)
         self._session = None
+        self._client_cm = None
         self._client = None
 
-    async def _get_client(self):
-        """Obtém ou cria o cliente S3."""
+    def _get_client(self):
+        """Obtém o cliente S3."""
         if self._client is None:
-            self._client = self._session.client(
-                's3',
-                endpoint_url=self.endpoint_url,
-                aws_access_key_id=self.access_key,
-                aws_secret_access_key=self.secret_key,
-                region_name=self.region
-            )
+            raise RuntimeError("Cliente não inicializado. Use async with.")
         return self._client
 
     async def ensure_bucket_exists(self):
@@ -83,7 +89,7 @@ class GarageStorageClient:
         Garante que o bucket existe. Cria se não existir.
         """
         try:
-            client = await self._get_client()
+            client = self._get_client()
             await client.head_bucket(Bucket=self.bucket_name)
             logger.info(f"Bucket '{self.bucket_name}' já existe.")
         except ClientError as e:
@@ -103,7 +109,7 @@ class GarageStorageClient:
         session_data: dict
     ) -> bool:
         """
-        Faz upload dos dados da sessão para o Garage.
+        Faz upload dos dados da sessão para o MinIO.
 
         Args:
             user_id: ID do usuário
@@ -116,13 +122,13 @@ class GarageStorageClient:
         object_key = f"sessions/{user_id}/{session_uuid}.json"
         
         try:
-            client = await self._get_client()
+            client = self._get_client()
             
             # Converte o dict para JSON
             json_data = json.dumps(session_data, ensure_ascii=False, indent=2)
             
             logger.info(
-                f"Iniciando upload para Garage: {object_key} "
+                f"Iniciando upload para MinIO: {object_key} "
                 f"({len(json_data)} bytes)"
             )
             
@@ -137,7 +143,7 @@ class GarageStorageClient:
             return True
             
         except (BotoCoreError, ClientError) as e:
-            logger.error(f"Erro ao fazer upload para Garage: {e}")
+            logger.error(f"Erro ao fazer upload para MinIO: {e}")
             return False
         except Exception as e:
             logger.error(f"Erro inesperado durante upload: {e}")
@@ -153,7 +159,7 @@ class RabbitMQConsumer:
         self,
         rabbitmq_url: str,
         queue_name: str,
-        storage_client: GarageStorageClient
+        storage_client: MinIOStorageClient
     ):
         self.rabbitmq_url = rabbitmq_url
         self.queue_name = queue_name
@@ -207,6 +213,7 @@ class RabbitMQConsumer:
             self.queue_name,
             durable=True,
             arguments={
+                'x-queue-type': 'quorum', 
                 'x-delivery-limit': 5  # Limite de reentregas para evitar loops infinitos
             }
         )
@@ -218,7 +225,7 @@ class RabbitMQConsumer:
         Processa uma mensagem recebida do RabbitMQ.
 
         Implementa at-least-once delivery: o ACK só é enviado após
-        confirmação de sucesso do upload para o Garage.
+        confirmação de sucesso do upload para o MinIO.
         """
         async with message.process():
             try:
@@ -247,7 +254,7 @@ class RabbitMQConsumer:
                     f"Processando sessão: user_id={user_id}, session_uuid={session_uuid}"
                 )
                 
-                # Fazer upload para o Garage
+                # Fazer upload para o MinIO
                 upload_success = await self.storage_client.upload_session(
                     user_id=user_id,
                     session_uuid=session_uuid,
@@ -268,7 +275,7 @@ class RabbitMQConsumer:
                     )
                     # O context manager não enviará ACK se ocorrer uma exceção
                     # Aqui precisamos lançar uma exceção para impedir o ACK
-                    raise Exception("Upload para Garage falhou")
+                    raise Exception("Upload para MinIO falhou")
                     
             except json.JSONDecodeError as e:
                 logger.error(f"Erro ao decodificar JSON: {e}")
@@ -334,7 +341,7 @@ class RabbitMQConsumer:
 
 class WorkerIO:
     """
-    Worker principal que orquestra o consumo do RabbitMQ e upload para Garage.
+    Worker principal que orquestra o consumo do RabbitMQ e upload para MinIO.
     """
 
     def __init__(self):
@@ -349,12 +356,12 @@ class WorkerIO:
         logger.info("Inicializando Worker IO...")
         
         # Inicializar cliente de storage
-        self.storage_client = GarageStorageClient(
-            endpoint_url=settings.GARAGE_ENDPOINT,
-            access_key=settings.GARAGE_ACCESS_KEY,
-            secret_key=settings.GARAGE_SECRET_KEY,
-            bucket_name=settings.GARAGE_BUCKET,
-            region=settings.GARAGE_REGION
+        self.storage_client = MinIOStorageClient(
+            endpoint_url=settings.MINIO_ENDPOINT,
+            access_key=settings.MINIO_ACCESS_KEY,
+            secret_key=settings.MINIO_SECRET_KEY,
+            bucket_name=settings.MINIO_DEFAULT_BUCKETS,
+            region=settings.MINIO_REGION
         )
         
         await self.storage_client.__aenter__()

@@ -1,5 +1,5 @@
 """
-Serviço de Storage para interação com o Garage (S3 Compatible).
+Serviço de Storage para interação com o MinIO (S3 Compatible).
 Gerencia operações de leitura e escrita de arquivos no bucket S3.
 """
 import json
@@ -19,18 +19,18 @@ logger = logging.getLogger(__name__)
 class StorageService:
     """
     Serviço para gerenciar operações de storage usando aioboto3.
-    Fornece métodos assíncronos para interagir com o Garage (S3 Compatible).
+    Fornece métodos assíncronos para interagir com o MinIO (S3 Compatible).
     """
 
     def __init__(self):
         """
-        Inicializa o serviço de storage com as configurações do Garage.
+        Inicializa o serviço de storage com as configurações do MinIO.
         """
-        self.endpoint_url = settings.GARAGE_ENDPOINT
-        self.aws_access_key_id = settings.GARAGE_ACCESS_KEY
-        self.aws_secret_access_key = settings.GARAGE_SECRET_KEY
-        self.bucket_name = settings.GARAGE_BUCKET
-        self.region_name = settings.GARAGE_REGION
+        self.endpoint_url = settings.MINIO_ENDPOINT
+        self.aws_access_key_id = settings.MINIO_ACCESS_KEY
+        self.aws_secret_access_key = settings.MINIO_SECRET_KEY
+        self.bucket_name = settings.MINIO_DEFAULT_BUCKETS
+        self.region_name = settings.MINIO_REGION
 
     def _get_session(self):
         """
@@ -107,7 +107,7 @@ class StorageService:
                 )
 
             # Trata outros erros do cliente S3
-            logger.error(f"Erro ao acessar S3/Garage: {e}")
+            logger.error(f"Erro ao acessar S3/MinIO: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Erro ao acessar storage: {str(e)}"

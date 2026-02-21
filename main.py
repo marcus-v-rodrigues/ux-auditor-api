@@ -85,7 +85,11 @@ class RabbitMQConnection:
             # Declara a fila
             await self._channel.declare_queue(
                 settings.RABBITMQ_QUEUE,
-                durable=True
+                durable=True,
+                arguments={
+                'x-queue-type': 'quorum',
+                'x-delivery-limit': 5
+                }
             )
         return self._channel
 
@@ -132,6 +136,16 @@ async def shutdown_event():
     await rabbitmq.close()
     print("✓ Conexão RabbitMQ fechada")
 
+@app.get("/health")
+async def health_check():
+    """
+    Endpoint simples para verificação de saúde da API.
+    """
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "1.0.0"
+    }
 
 @app.post("/auth/register", response_model=RegisterResponse)
 async def register_user(

@@ -16,20 +16,17 @@ services:
       - .env
     depends_on:
       rabbitmq:
-        condition: service_started
+        condition: service_healthy
       ux-auditor-api-db:
         condition: service_started
-      garage:
-        condition: service_healthy  # O Docker espera o healthcheck do Garage passar
-    volumes:
-      # Volume compartilhado para credenciais dinâmicas do Garage (read-only)
-      - garage_secrets:/secrets:ro
+      minio:
+        condition: service_started
     restart: unless-stopped
     networks:
       - ux_auditor_network
 
   # Worker IO - Processo em background
-  # Consome mensagens do RabbitMQ e persiste dados no Garage (S3-compatible)
+  # Consome mensagens do RabbitMQ e persiste dados no MinIO (S3-compatible)
   ux-worker:
     build: .
     container_name: ux_auditor_worker
@@ -38,12 +35,9 @@ services:
       - .env
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      minio:
         condition: service_started
-      garage:
-        condition: service_healthy # Garante que o wrapper.sh já gerou as chaves
-    volumes:
-      # Volume compartilhado para credenciais dinâmicas do Garage (read-only)
-      - garage_secrets:/secrets:ro
     restart: unless-stopped
     networks:
       - ux_auditor_network
@@ -72,6 +66,11 @@ services:
   # Porta 15672: Interface web de gerenciamento
   rabbitmq:
     image: rabbitmq:3-management
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     container_name: ux_auditor_rabbitmq
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBIT_USER}
@@ -88,34 +87,30 @@ services:
       - ux_auditor_network
 
   # ===========================================
-  # GARAGE - STORAGE COMPATÍVEL COM S3
+  # MINIO - STORAGE COMPATÍVEL COM S3
   # ===========================================
 
-  # Garage - Serviço de armazenamento S3-compatible
-  # Utiliza wrapper para gerar credenciais dinâmicas na inicialização
-  garage:
-    image: dxflrs/garage:v1.3.1
-    container_name: ux_garage
-    # Wrapper script que inicia o Garage e provisiona credenciais dinamicamente
-    command: /scripts/garage-wrapper.sh
+  # MinIO - Serviço de armazenamento S3-compatible
+  # Simples e direto: credenciais e bucket definidos via variáveis de ambiente
+  minio:
+    image: minio/minio:latest
+    container_name: ux-minio
     ports:
-      - "3900:3900"  # API S3
-      - "3901:3901"  # RPC interno
+      - "9000:9000"   # API S3
+      - "9001:9001"   # Console Web
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     env_file:
       - .env
     volumes:
-      - ux_auditor_garage_data:/data
-      # Script wrapper para inicialização com geração de credenciais
-      - ./scripts/garage-wrapper.sh:/scripts/garage-wrapper.sh:ro
-      # Volume compartilhado para credenciais geradas dinamicamente
-      - garage_secrets:/secrets
-    # Healthcheck para verificar se o Garage está pronto
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3900/health"]
-      interval: 5s
-      timeout: 10s
-      retries: 10
-      start_period: 10s
+      - ux_auditor_minio_data:/data
     restart: unless-stopped
     networks:
       - ux_auditor_network
@@ -140,9 +135,5 @@ volumes:
     driver: local
   ux_auditor_rabbitmq_data:
     driver: local
-  ux_auditor_garage_data:
-    driver: local
-  # Volume compartilhado para credenciais dinâmicas do Garage
-  # O Garage gera as credenciais e a API/Worker as consome
-  garage_secrets:
+  ux_auditor_minio_data:
     driver: local

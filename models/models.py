@@ -59,7 +59,6 @@ class SessionAnalysis(SQLModel, table=True):
     __tablename__ = "session_analyses"
     __table_args__ = (
         Index("ix_session_analyses_user_id", "user_id"),
-        Index("ix_session_analyses_session_uuid", "session_uuid"),
     )
     
     # ID único da análise (UUID gerado automaticamente)
