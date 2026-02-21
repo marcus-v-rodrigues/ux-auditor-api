@@ -8,7 +8,7 @@ services:
   # Serviço que expõe os endpoints REST da aplicação
   ux-auditor-api:
     build: .
-    container_name: ux_auditor_api
+    container_name: ux-auditor-api
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -29,7 +29,7 @@ services:
         condition: service_started
     restart: unless-stopped
     networks:
-      - ux_auditor_network
+      - ux-auditor-network
 
   # Worker IO - Processo em background
   # Consome mensagens do RabbitMQ e persiste dados no MinIO (S3-compatible)
@@ -46,7 +46,7 @@ services:
         condition: service_started
     restart: unless-stopped
     networks:
-      - ux_auditor_network
+      - ux-auditor-network
 
   # ===========================================
   # SERVIÇOS DE INFRAESTRUTURA
@@ -56,16 +56,16 @@ services:
   # Porta 5433 no host para evitar conflito com outros bancos locais
   ux-auditor-api-db:
     image: postgres:15-alpine
-    container_name: ux_auditor_api_db
+    container_name: ux-auditor-api-db
     ports:
       - "5433:${POSTGRES_PORT:-5432}"
     env_file:
       - .env
     volumes:
-      - ux_auditor_api_postgres_data:/var/lib/postgresql/data
+      - ux-auditor-api-postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
     networks:
-      - ux_auditor_network
+      - ux-auditor-network
 
   # RabbitMQ - Message Broker
   # Porta 5672: Protocolo AMQP para comunicação entre serviços
@@ -77,7 +77,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    container_name: ux_auditor_rabbitmq
+    container_name: ux-auditor-rabbitmq
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBIT_USER}
       - RABBITMQ_DEFAULT_PASS=${RABBIT_PASS}
@@ -87,10 +87,10 @@ services:
     env_file:
       - .env
     volumes:
-      - ux_auditor_rabbitmq_data:/var/lib/rabbitmq
+      - ux-auditor-rabbitmq-data:/var/lib/rabbitmq
     restart: unless-stopped
     networks:
-      - ux_auditor_network
+      - ux-auditor-network
 
   # ===========================================
   # MINIO - STORAGE COMPATÍVEL COM S3
@@ -116,19 +116,19 @@ services:
     env_file:
       - .env
     volumes:
-      - ux_auditor_minio_data:/data
+      - ux-auditor-minio-data:/data
     restart: unless-stopped
     networks:
-      - ux_auditor_network
+      - ux-auditor-network
 
 # ===========================================
 # REDES
 # ===========================================
 
 # Rede externa para comunicação entre microsserviços
-# Deve ser criada previamente com: docker network create ux_auditor_network
+# Deve ser criada previamente com: docker network create ux-auditor-network
 networks:
-  ux_auditor_network:
+  ux-auditor-network:
     external: true
 
 # ===========================================
@@ -137,9 +137,9 @@ networks:
 
 # Volumes persistentes para dados dos serviços de infraestrutura
 volumes:
-  ux_auditor_api_postgres_data:
+  ux-auditor-api-postgres-data:
     driver: local
-  ux_auditor_rabbitmq_data:
+  ux-auditor-rabbitmq-data:
     driver: local
-  ux_auditor_minio_data:
+  ux-auditor-minio-data:
     driver: local
