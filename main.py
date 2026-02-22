@@ -162,11 +162,16 @@ async def register_user(
     Fluxo de Execução:
     1. Valida o payload (email, password, name)
     2. Passo A: Faz requisição HTTP POST para o Janus ('/api/users')
-       passando os dados e o header 'X-Service-Key'
-    3. Passo B: Se o Janus retornar sucesso (201/200), pega o 'id' (UUID) retornado
-    4. Passo C: Cria o usuário no banco local do UX Auditor (tabela 'users')
-       usando EXATAMENTE o mesmo 'id' retornado pelo Janus, o email e o nome
-    5. Passo D: Se falhar no banco local, tenta desfazer no Janus (opcional, ou apenas loga o erro crítico de desincronia)
+       passando os dados, o header 'X-Service-Key' e o 'clientId' para vínculo
+    3. Passo B: Se o Janus retornar sucesso (201 Created ou 200 OK), pega o 'id' (UUID)
+       - 201 Created: Novo usuário criado e vinculado ao cliente
+       - 200 OK: Usuário existente vinculado ao cliente (idempotência)
+    4. Passo C: Verifica se o usuário já existe localmente antes de criar
+    5. Passo D: Cria o usuário no banco local do UX Auditor (tabela 'users')
+       usando EXATAMENTE o mesmo 'id' retornado pelo Janus
+    6. Passo E: Se falhar no banco local, rollback SELETIVO no Janus
+       - Só deleta se o status original foi 201 (novo usuário)
+       - Não deleta se foi 200 (usuário já existente usado por outros sistemas)
     
     Args:
         request (RegisterRequest): Payload contendo email, password e name
@@ -187,12 +192,17 @@ async def register_user(
             detail="Email, password and name are required"
         )
     
-    # Passo A: Faz requisição HTTP POST para o Janus
+    # Variável para controlar se o rollback deve deletar o usuário no Janus
+    # True se o usuário foi criado novo (201), False se já existia (200)
+    should_rollback_janus = False
+    
+    # Passo A: Faz requisição HTTP POST para o Janus com clientId
     janus_url = f"{settings.JANUS_API_URL}/api/users"
     janus_payload = {
         "email": request.email,
         "password": request.password,
-        "name": request.name
+        "name": request.name,
+        "clientId": settings.JANUS_CLIENT_ID  # Identificador da aplicação para vínculo
     }
     headers = {
         "X-Service-Key": settings.JANUS_SERVICE_API_KEY,
@@ -201,6 +211,7 @@ async def register_user(
     
     try:
         print(f"🔗 Sending registration request to Janus: {janus_url}")
+        print(f"   ClientID: {settings.JANUS_CLIENT_ID}")
         janus_response = requests.post(
             janus_url,
             json=janus_payload,
@@ -208,14 +219,25 @@ async def register_user(
             timeout=10
         )
         
-        # Verifica se a requisição foi bem-sucedida
-        if janus_response.status_code not in [200, 201]:
+        # Captura o status code para determinar o tipo de resposta
+        janus_status_code = janus_response.status_code
+        
+        # Verifica se a requisição foi bem-sucedida (201 Created ou 200 OK)
+        if janus_status_code not in [200, 201]:
             error_detail = janus_response.text
-            print(f"✗ Janus registration failed with status {janus_response.status_code}: {error_detail}")
+            print(f"✗ Janus registration failed with status {janus_status_code}: {error_detail}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to register user in Janus: {error_detail}"
             )
+        
+        # Determina se é um novo usuário ou um vínculo de usuário existente
+        if janus_status_code == 201:
+            print(f"✓ New user created in Janus (201 Created)")
+            should_rollback_janus = True  # Novo usuário pode ser deletado em caso de falha
+        else:  # status 200
+            print(f"✓ Existing user linked to client in Janus (200 OK)")
+            should_rollback_janus = False  # Usuário existente NÃO deve ser deletado
         
         # Passo B: Extrai o 'id' (UUID) retornado pelo Janus
         janus_data = janus_response.json()
@@ -228,7 +250,7 @@ async def register_user(
                 detail="Janus response missing user ID"
             )
         
-        print(f"✓ User registered in Janus with ID: {user_id}")
+        print(f"✓ User {'created' if janus_status_code == 201 else 'linked'} in Janus with ID: {user_id}")
         
     except requests.RequestException as e:
         print(f"✗ Failed to connect to Janus service: {str(e)}")
@@ -237,47 +259,64 @@ async def register_user(
             detail=f"Failed to connect to Janus service: {str(e)}"
         )
     
-    # Passo C: Cria o usuário no banco local do UX Auditor usando o mesmo ID
+    # Passo C: Verifica se o usuário já existe localmente (resiliência a re-tentativas)
+    try:
+        existing_user = session.get(User, user_id)
+        if existing_user:
+            print(f"✓ User already exists in local database: {user_id}")
+            # Usuário já existe localmente, retorna sucesso (idempotência)
+            return RegisterResponse(
+                id=user_id,
+                email=existing_user.email,
+                name=existing_user.name,
+                message="User already registered and synchronized"
+            )
+    except Exception as e:
+        print(f"⚠️ Error checking local user existence: {str(e)}")
+        # Continua para tentar criar o usuário
+    
+    # Passo D: Cria o usuário no banco local do UX Auditor usando o mesmo ID
     try:
         print(f"💾 Creating user in local database with ID: {user_id}")
         
-        # Verifica se o usuário já existe
-        existing_user = session.get(User, user_id)
-        if existing_user:
-            print(f"⚠️ User already exists in local database: {user_id}")
-        else:
-            # Cria novo usuário
-            new_user = User(
-                id=user_id,
-                email=request.email,
-                name=request.name
-            )
-            session.add(new_user)
-            session.commit()
-            print(f"✓ User created in local database: {user_id}")
+        # Cria novo usuário
+        new_user = User(
+            id=user_id,
+            email=request.email,
+            name=request.name
+        )
+        session.add(new_user)
+        session.commit()
+        print(f"✓ User created in local database: {user_id}")
         
     except Exception as e:
-        # Passo D: Se falhar no banco local, tenta desfazer no Janus (opcional)
+        # Passo E: Rollback seletivo no Janus
         print(f"✗ CRITICAL: Failed to create user in local database: {str(e)}")
         print(f"⚠️  Desynchronization detected! User exists in Janus but not in UX Auditor")
         
-        # Tenta deletar o usuário do Janus para evitar desincronia
-        try:
-            delete_url = f"{settings.JANUS_API_URL}/api/users/{user_id}"
-            delete_headers = {
-                "X-Service-Key": settings.JANUS_SERVICE_API_KEY
-            }
-            delete_response = requests.delete(
-                delete_url,
-                headers=delete_headers,
-                timeout=10
-            )
-            if delete_response.status_code in [200, 204]:
-                print(f"✓ Rolled back user creation in Janus: {user_id}")
-            else:
-                print(f"⚠️  Failed to rollback user in Janus: {delete_response.status_code}")
-        except Exception as rollback_error:
-            print(f"⚠️  Failed to rollback user in Janus: {str(rollback_error)}")
+        # Só executa rollback se foi um novo usuário criado (201)
+        # Se foi 200 (usuário existente vinculado), NÃO deleta para não afetar outros sistemas
+        if should_rollback_janus:
+            print(f"🔄 Attempting rollback in Janus (user was newly created)...")
+            try:
+                delete_url = f"{settings.JANUS_API_URL}/api/users/{user_id}"
+                delete_headers = {
+                    "X-Service-Key": settings.JANUS_SERVICE_API_KEY
+                }
+                delete_response = requests.delete(
+                    delete_url,
+                    headers=delete_headers,
+                    timeout=10
+                )
+                if delete_response.status_code in [200, 204]:
+                    print(f"✓ Rolled back user creation in Janus: {user_id}")
+                else:
+                    print(f"⚠️  Failed to rollback user in Janus: {delete_response.status_code}")
+            except Exception as rollback_error:
+                print(f"⚠️  Failed to rollback user in Janus: {str(rollback_error)}")
+        else:
+            print(f"⚠️  Skipping rollback in Janus (user was linked, not created)")
+            print(f"⚠️  User {user_id} remains in Janus as it may be used by other systems")
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

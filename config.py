@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Configuração do Janus Service (Sincronização de Usuários)
     JANUS_API_URL: str = "http://janus-service:3001"
     JANUS_SERVICE_API_KEY: str = ""
+    # Identificador único da aplicação UX Auditor para vínculo de usuários no Janus IDP
+    # Este ID é usado para associar usuários a este cliente específico no sistema de idempotência
+    JANUS_CLIENT_ID: str = "ux-auditor"
     
     # Configuração RabbitMQ
     # --- Variáveis soltas do RabbitMQ (Vêm do .env) ---
