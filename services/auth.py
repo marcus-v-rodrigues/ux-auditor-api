@@ -56,12 +56,14 @@ def get_jwks_public_key(token: str) -> str:
         header = jwt.get_unverified_header(token)
         kid = header.get('kid')
         if not kid:
+            print("❌ ERRO JWT: Token não contém 'kid' no header")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token não contém 'kid' no header",
                 headers={"WWW-Authenticate": "Bearer"},
             )
     except Exception as e:
+        print(f"❌ ERRO JWT ao ler header: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Falha ao ler header do token: {str(e)}",
@@ -132,11 +134,11 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
                 token,
                 key=public_key,
                 algorithms=[settings.JWT_ALGORITHM],
-                issuer=settings.AUTH_ISSUER_URL,
                 options={
                     'verify_signature': True,
                     'verify_exp': True,
-                    'verify_iss': True
+                    'verify_iss': False,
+                    'verify_aud': False
                 }
             )
         elif settings.JWT_PUBLIC_KEY:
@@ -145,11 +147,11 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
                 token,
                 key=settings.JWT_PUBLIC_KEY,
                 algorithms=[settings.JWT_ALGORITHM],
-                issuer=settings.AUTH_ISSUER_URL,
                 options={
                     'verify_signature': True,
                     'verify_exp': True,
-                    'verify_iss': True
+                    'verify_iss': False,
+                    'verify_aud': False
                 }
             )
         else:
@@ -161,30 +163,35 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
         return payload
         
     except jwt.ExpiredSignatureError:
+        print("❌ ERRO JWT: Token expirado prematuramente (Problema de relógio/sync?)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidSignatureError:
+        print("❌ ERRO JWT: Assinatura do token inválida (Chave pública não bate)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Assinatura do token inválida",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidIssuerError:
+        print("❌ ERRO JWT: Emissor do token inválido")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Emissor do token inválido. Esperado: {settings.AUTH_ISSUER_URL}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidTokenError as e:
+        print(f"❌ ERRO JWT (Token ou Algoritmo Inválido): {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token inválido: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except Exception as e:
+        print(f"❌ ERRO JWT Exceção Geral: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Falha na validação do token: {str(e)}",
@@ -232,14 +239,20 @@ def validate_token_payload(payload: Dict[str, Any]) -> TokenData:
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Extrai o emissor (iss) - opcional mas deve corresponder ao emissor esperado
+    # Extrai o emissor (iss) - opcional mas deve corresponder a um dos emissores permitidos
     iss: Optional[str] = payload.get("iss")
-    if settings.AUTH_ISSUER_URL and iss != settings.AUTH_ISSUER_URL:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Emissor do token incorreto. Esperado: {settings.AUTH_ISSUER_URL}, Recebido: {iss}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if settings.AUTH_ISSUER_URL:
+        # Lista de emissores permitidos: URL pública e URL interna do Docker
+        allowed_issuers = [
+            settings.AUTH_ISSUER_URL,
+            "http://janus-service:3000/oidc"
+        ]
+        if iss not in allowed_issuers:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Emissor do token incorreto. Esperado um de: {allowed_issuers}, Recebido: {iss}",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     
     return TokenData(user_id=sub, exp=exp, iss=iss)
 
@@ -271,6 +284,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     Raises:
         HTTPException: 401 Unauthorized se o token for inválido, ausente ou expirado
     """
+    print(f"🔍 TOKEN BRUTO RECEBIDO: '{token}'")
     # Decodifica e valida o token
     payload = decode_jwt_token(token)
     
