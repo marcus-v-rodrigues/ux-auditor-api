@@ -8,7 +8,6 @@ A API foi transformada em um Resource Server OAuth2 robusto com as seguintes cap
 
 - **Validação de Token JWT RS256**: Valida tokens emitidos pelo janus-idp usando criptografia assimétrica
 - **Suporte a JWKS**: Validação dinâmica de chaves públicas via endpoint JWKS
-- **Chave Pública Estática**: Opção para usar chave pública estática quando JWKS não está disponível
 - **Endpoints Protegidos**: O endpoint `/ingest` requer autenticação válida
 - **Integração RabbitMQ**: Publica eventos de telemetria de forma assíncrona na fila de mensagens
 - **Rastreamento de Sessão**: Associa cada ingestão a um UUID de sessão único e ID de usuário
@@ -34,13 +33,13 @@ A API foi transformada em um Resource Server OAuth2 robusto com as seguintes cap
 
 ### 1. Módulo de Autenticação ([`services/auth.py`](services/auth.py:1))
 
-Fornece validação de token OAuth2 com RS256 e suporte a JWKS:
+Fornece validação de token OAuth2 com RS256 e JWKS dinâmico:
 
-- **OAuth2PasswordBearer**: Extrai token Bearer do cabeçalho Authorization
-- **Validação RS256**: Valida assinatura usando chave pública (assimétrica)
+- **Extração do Bearer token**: Lê o cabeçalho `Authorization`
+- **Validação RS256**: Valida assinatura usando chave pública assimétrica derivada do JWKS
 - **Suporte JWKS**: Busca chaves públicas dinamicamente do endpoint JWKS
 - **Cache de JWKS**: Cache de 5 minutos para chaves públicas
-- **Verificação de Claims**: Verifica `exp` (expiração), `iss` (emissor) e `sub` (ID do usuário)
+- **Verificação de Claims**: Verifica `exp` (expiração), `iss` (emissor), `aud` (audience) e `sub` (ID do usuário)
 - **Respostas 401 Automáticas**: Retorna não autorizado para tokens inválidos
 
 #### Funções Principais
@@ -55,7 +54,7 @@ Fornece validação de token OAuth2 com RS256 e suporte a JWKS:
 Configuração centralizada usando `pydantic-settings`:
 
 - **AUTH_JWKS_URL**: URL do endpoint JWKS para validação dinâmica
-- **JWT_PUBLIC_KEY**: Chave pública estática (alternativa ao JWKS)
+- **AUTH_AUDIENCE**: Audience esperada no token
 - **JWT_ALGORITHM**: Algoritmo de assinatura (RS256 para Janus)
 - **AUTH_ISSUER_URL**: Emissor esperado (URL do realm Janus)
 - **RABBITMQ_URL**: String de conexão RabbitMQ
@@ -88,7 +87,7 @@ cp .env.example .env
 
 Edite `.env` com sua configuração:
 
-#### Opção A: Usando JWKS (Recomendado para Janus)
+#### Configuração JWKS
 
 ```env
 # URL do endpoint JWKS do Janus
@@ -99,29 +98,7 @@ JWT_ALGORITHM=RS256
 
 # Emissor JWT (URL do realm)
 AUTH_ISSUER_URL=https://seu-janus-idp.com/realms/master
-
-# Configuração RabbitMQ
-RABBITMQ_URL=amqp://guest:guest@localhost:5672/
-RABBITMQ_QUEUE=raw_sessions
-
-# Configuração da Aplicação
-APP_HOST=0.0.0.0
-APP_PORT=8000
-```
-
-#### Opção B: Usando Chave Pública Estática
-
-```env
-# Chave pública estática (PEM formatado)
-JWT_PUBLIC_KEY=-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
------END PUBLIC KEY-----
-
-# Algoritmo JWT
-JWT_ALGORITHM=RS256
-
-# Emissor JWT
-AUTH_ISSUER_URL=https://seu-janus-idp.com/realms/master
+AUTH_AUDIENCE=https://seu-janus-idp.com/realms/master/api
 
 # Configuração RabbitMQ
 RABBITMQ_URL=amqp://guest:guest@localhost:5672/
@@ -399,7 +376,7 @@ A API imprime mensagens de conexão ao RabbitMQ no startup:
 
 ### Erros de Token Inválido
 
-- Verifique se `AUTH_JWKS_URL` ou `JWT_PUBLIC_KEY` está configurado
+- Verifique se `AUTH_JWKS_URL` está configurado
 - Verifique se `AUTH_ISSUER_URL` corresponde ao emissor do token
 - Verifique a expiração do token
 - Teste a URL do JWKS diretamente no navegador

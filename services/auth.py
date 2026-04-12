@@ -1,23 +1,17 @@
 """
 Módulo de autenticação da UX Auditor API.
 Implementa Resource Server OAuth2 com validação de JWT para tokens emitidos pelo janus-idp.
-Suporta algoritmo RS256 (assimétrico) com JWKS ou chave pública estática.
+Suporta algoritmo RS256 (assimétrico) com JWKS dinâmico.
 """
 from typing import Optional, Dict, Any
 from datetime import datetime
+import time
 import jwt
 import json
 import requests
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from jwt.algorithms import RSAAlgorithm
+from fastapi import HTTPException, Request, status
 from config import settings
-
-
-# Esquema OAuth2 que espera token Bearer no cabeçalho Authorization
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="/token",  # Placeholder; emissão real de tokens é feita pelo janus-idp
-    auto_error=True
-)
 
 
 class TokenData:
@@ -30,13 +24,75 @@ class TokenData:
         self.iss = iss
 
 
-# Cache para chaves públicas JWKS
+# Cache para o JWKS
 _jwks_cache: Optional[Dict[str, Any]] = None
 _jwks_cache_time: Optional[float] = None
 _JWKS_CACHE_TTL = 300  # 5 minutos
 
 
-def get_jwks_public_key(token: str) -> str:
+def _extract_bearer_token(request: Request) -> str:
+    """
+    Extrai o token Bearer do cabeçalho Authorization.
+    """
+    auth = request.headers.get("Authorization")
+    if not auth:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cabeçalho Authorization ausente",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    parts = auth.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cabeçalho Authorization inválido",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return parts[1].strip()
+
+
+def _get_cached_jwks() -> Dict[str, Any]:
+    """
+    Busca o JWKS do endpoint configurado, com cache por TTL.
+    """
+    global _jwks_cache, _jwks_cache_time
+
+    if not settings.AUTH_JWKS_URL:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AUTH_JWKS_URL não configurado",
+        )
+
+    current_time = time.monotonic()
+    if _jwks_cache and _jwks_cache_time and (current_time - _jwks_cache_time) < _JWKS_CACHE_TTL:
+        print("🔑 JWKS carregado do cache")
+        return _jwks_cache
+
+    try:
+        print(f"🔑 Buscando JWKS em: {settings.AUTH_JWKS_URL}")
+        response = requests.get(settings.AUTH_JWKS_URL, timeout=5)
+        response.raise_for_status()
+        jwks = response.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Falha ao obter JWKS: {str(e)}",
+        )
+
+    if not isinstance(jwks, dict) or "keys" not in jwks:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Resposta JWKS inválida",
+        )
+
+    _jwks_cache = jwks
+    _jwks_cache_time = current_time
+    return jwks
+
+
+def get_jwks_public_key(token: str) -> Any:
     """
     Obtém a chave pública do JWKS endpoint para validar o token RS256.
     
@@ -44,17 +100,16 @@ def get_jwks_public_key(token: str) -> str:
         token: Token JWT para extrair o kid (key ID)
         
     Returns:
-        Chave pública PEM formatada
+        Chave pública RSA montada a partir do JWK
         
     Raises:
         HTTPException: Se falhar ao obter ou processar JWKS
     """
-    global _jwks_cache, _jwks_cache_time
-    
-    # Extrai o kid (key ID) do token header
     try:
         header = jwt.get_unverified_header(token)
-        kid = header.get('kid')
+        kid = header.get("kid")
+        alg = header.get("alg")
+        print(f"🔎 Header JWT: kid={kid}, alg={alg}")
         if not kid:
             print("❌ ERRO JWT: Token não contém 'kid' no header")
             raise HTTPException(
@@ -62,6 +117,15 @@ def get_jwks_public_key(token: str) -> str:
                 detail="Token não contém 'kid' no header",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if alg and alg != settings.JWT_ALGORITHM:
+            print(f"❌ ERRO JWT: Algoritmo do token inválido: {alg}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Algoritmo do token inválido: {alg}",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ ERRO JWT ao ler header: {e}")
         raise HTTPException(
@@ -69,47 +133,32 @@ def get_jwks_public_key(token: str) -> str:
             detail=f"Falha ao ler header do token: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Verifica cache
-    current_time = datetime.utcnow().timestamp()
-    if _jwks_cache and _jwks_cache_time and (current_time - _jwks_cache_time) < _JWKS_CACHE_TTL:
-        jwks = _jwks_cache
-    else:
-        # Busca JWKS do endpoint
-        try:
-            response = requests.get(settings.AUTH_JWKS_URL, timeout=5)
-            response.raise_for_status()
-            jwks = response.json()
-            _jwks_cache = jwks
-            _jwks_cache_time = current_time
-        except requests.RequestException as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Falha ao obter JWKS: {str(e)}",
-            )
-    
-    # Encontra a chave correspondente ao kid
-    keys = jwks.get('keys', [])
-    rsa_key = None
+    jwks = _get_cached_jwks()
+
+    keys = jwks.get("keys", [])
+    jwk_key = None
     for key in keys:
-        if key.get('kid') == kid:
-            rsa_key = {
-                'kty': key['kty'],
-                'kid': key['kid'],
-                'use': key['use'],
-                'n': key['n'],
-                'e': key['e']
-            }
+        if key.get("kid") == kid:
+            jwk_key = key
             break
-    
-    if not rsa_key:
+
+    if not jwk_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Chave pública não encontrada para kid: {kid}",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    return rsa_key
+
+    try:
+        print(f"✅ JWKS encontrou chave para kid={kid}")
+        return RSAAlgorithm.from_jwk(json.dumps(jwk_key))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Falha ao converter JWK em chave pública: {str(e)}",
+        )
 
 
 def decode_jwt_token(token: str) -> Dict[str, Any]:
@@ -126,42 +175,44 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
         HTTPException: Se o token for inválido, expirado ou malformado
     """
     try:
-        # Determina a chave pública a ser usada
-        if settings.AUTH_JWKS_URL:
-            # Usa JWKS endpoint para obter chave pública dinamicamente
-            public_key = get_jwks_public_key(token)
-            payload = jwt.decode(
-                token,
-                key=public_key,
-                algorithms=[settings.JWT_ALGORITHM],
-                options={
-                    'verify_signature': True,
-                    'verify_exp': True,
-                    'verify_iss': False,
-                    'verify_aud': False
-                }
-            )
-        elif settings.JWT_PUBLIC_KEY:
-            # Usa chave pública estática
-            payload = jwt.decode(
-                token,
-                key=settings.JWT_PUBLIC_KEY,
-                algorithms=[settings.JWT_ALGORITHM],
-                options={
-                    'verify_signature': True,
-                    'verify_exp': True,
-                    'verify_iss': False,
-                    'verify_aud': False
-                }
-            )
-        else:
+        if settings.JWT_ALGORITHM != "RS256":
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="AUTH_JWKS_URL ou JWT_PUBLIC_KEY deve ser configurado",
+                detail=f"JWT_ALGORITHM inválido para este serviço: {settings.JWT_ALGORITHM}",
             )
-        
+
+        if not settings.AUTH_ISSUER_URL:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AUTH_ISSUER_URL não configurado",
+            )
+
+        if not settings.AUTH_AUDIENCE:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AUTH_AUDIENCE não configurado",
+            )
+
+        public_key = get_jwks_public_key(token)
+        payload = jwt.decode(
+            token,
+            key=public_key,
+            algorithms=[settings.JWT_ALGORITHM],
+            audience=settings.AUTH_AUDIENCE,
+            issuer=settings.AUTH_ISSUER_URL,
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            }
+        )
+
         return payload
-        
+
+    except HTTPException:
+        raise
+
     except jwt.ExpiredSignatureError:
         print("❌ ERRO JWT: Token expirado prematuramente (Problema de relógio/sync?)")
         raise HTTPException(
@@ -239,25 +290,13 @@ def validate_token_payload(payload: Dict[str, Any]) -> TokenData:
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Extrai o emissor (iss) - opcional mas deve corresponder a um dos emissores permitidos
+    # O issuer e o audience já foram validados em decode_jwt_token()
     iss: Optional[str] = payload.get("iss")
-    if settings.AUTH_ISSUER_URL:
-        # Lista de emissores permitidos: URL pública e URL interna do Docker
-        allowed_issuers = [
-            settings.AUTH_ISSUER_URL,
-            "http://janus-service:3000/oidc"
-        ]
-        if iss not in allowed_issuers:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Emissor do token incorreto. Esperado um de: {allowed_issuers}, Recebido: {iss}",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    
+
     return TokenData(user_id=sub, exp=exp, iss=iss)
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
+async def get_current_user(request: Request) -> TokenData:
     """
     Dependência FastAPI para autenticar e extrair informações do usuário do token JWT.
     
@@ -268,15 +307,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     4. Verifica se o emissor (claim iss) corresponde ao janus-idp
     5. Extrai o user_id do claim sub
     
-    Suporta validação via JWKS endpoint ou chave pública estática.
-    
     Uso:
         @app.get("/protected")
         async def endpoint_protected(current_user: TokenData = Depends(get_current_user)):
             return {"user_id": current_user.user_id}
-    
+
     Args:
-        token: Token JWT extraído do cabeçalho Authorization pelo oauth2_scheme
+        request: Requisição HTTP contendo o cabeçalho Authorization
         
     Returns:
         Objeto TokenData contendo user_id e outras informações do token
@@ -284,7 +321,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     Raises:
         HTTPException: 401 Unauthorized se o token for inválido, ausente ou expirado
     """
-    print(f"🔍 TOKEN BRUTO RECEBIDO: '{token}'")
+    token = _extract_bearer_token(request)
+    print(f"🔍 TOKEN BRUTO RECEBIDO: {token}")
     # Decodifica e valida o token
     payload = decode_jwt_token(token)
     
@@ -294,21 +332,22 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     return token_data
 
 
-async def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[TokenData]:
+async def get_current_user_optional(request: Request) -> Optional[TokenData]:
     """
     Versão opcional do get_current_user que retorna None em vez de lançar 401.
     Útil para endpoints que funcionam com ou sem autenticação.
     
     Args:
-        token: Token JWT extraído do cabeçalho Authorization (pode ser None)
+        request: Requisição HTTP contendo o cabeçalho Authorization (opcional)
         
     Returns:
         Objeto TokenData se o token for válido, None caso contrário
     """
-    if token is None:
+    auth = request.headers.get("Authorization")
+    if not auth:
         return None
-    
     try:
+        token = _extract_bearer_token(request)
         payload = decode_jwt_token(token)
         token_data = validate_token_payload(payload)
         return token_data

@@ -25,12 +25,12 @@ A infraestrutura baseia-se em quatro pilares:
 ## Fundamentação Matemática
 A integridade dos dados é garantida via hashing e validação de tokens JWT.
 *   **Assinatura de Token:** 
-    $$ 	ext{Signature} = 	ext{HMAC-SHA256}(	ext{header} + "." + 	ext{payload}, 	ext{secret}) $$
+    $$ \text{Signature} = \text{RS256}(\text{header} + "." + \text{payload}, \text{private key}) $$
 *   **Idempotência de Registro:** O fluxo de registro utiliza o UUID retornado pelo Janus como chave primária, garantindo consistência referencial ($FK = PK$).
 
 ## Parâmetros Técnicos
 *   `RABBITMQ_QUEUE_TYPE`: Quorum (Garante alta disponibilidade e consistência).
-*   `JWT_ALGORITHM`: RS256 ou HS256 (conforme configurado no IDP).
+*   `JWT_ALGORITHM`: RS256.
 *   `SQLMODEL_POOL_SIZE`: Configurado para suportar concorrência de workers.
 
 ## Mapeamento Tecnológico e Referências
