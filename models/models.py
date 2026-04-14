@@ -95,6 +95,28 @@ class SessionAnalysis(SQLModel, table=True):
         default=None,
         sa_column=Column(JSON, nullable=True)
     )
+
+    process_stats: Optional[Dict[str, Any]] = SQLField(
+        default=None,
+        sa_column=Column(JSON, nullable=True)
+    )
+
+    # Estado do processamento assíncrono
+    processing_status: str = SQLField(
+        default="queued",
+        max_length=32,
+        index=True
+    )
+
+    processing_error: Optional[str] = SQLField(
+        default=None,
+        sa_column=Column(String(1024), nullable=True)
+    )
+
+    processed_at: Optional[datetime] = SQLField(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     
     # Timestamps
     created_at: datetime = SQLField(
@@ -352,6 +374,27 @@ class SessionProcessResponse(BaseModel):
     semantic_bundle: Optional[Dict[str, Any]] = None
     llm_output: Optional[Dict[str, Any]] = None
     structured_analysis: Optional[Dict[str, Any]] = None
+
+
+class SessionJobSubmissionResponse(BaseModel):
+    """
+    Resposta para submissão assíncrona de processamento.
+    """
+    session_uuid: str
+    user_id: str
+    status: str
+    message: str
+
+
+class SessionJobStatusResponse(BaseModel):
+    """
+    Resposta de status e consulta de resultado do processamento.
+    """
+    session_uuid: str
+    user_id: str
+    status: str
+    processing_error: Optional[str] = None
+    result: Optional[SessionProcessResponse] = None
 
 
 class RegisterRequest(BaseModel):

@@ -5,7 +5,6 @@ from typing import List, Dict, Any
 from datetime import datetime
 import uuid
 import json
-import traceback
 import aio_pika
 import requests
 
@@ -13,20 +12,19 @@ import requests
 from config import settings
 
 # Importação dos Modelos
-from models import AnalyzeRequest, InsightEvent, RRWebEvent, SessionProcessResponse, RegisterRequest, RegisterResponse
+from models import (
+    SessionProcessStats,
+    SessionProcessResponse,
+    SessionJobSubmissionResponse,
+    SessionJobStatusResponse,
+    RegisterRequest,
+    RegisterResponse,
+)
 from models.models import User, SessionAnalysis
-# Importação dos Serviços de Lógica (ML e Heurísticas)
-from services import detect_behavioral_anomalies, detect_rage_clicks
-# Importação do Motor Semântico (interpretação estruturada via LLM)
-import semantic
-# Importação do Processador de Dados Otimizado (Novo Módulo)
-from services import SessionPreprocessor, build_semantic_session_bundle
 # Importação do Módulo de Autenticação
 from services import get_current_user, TokenData
-# Importação do Serviço de Storage (Garage)
-from services.storage import storage_service
 # Importação do Banco de Dados (SQLModel)
-from database import engine, get_session, init_db
+from database import get_session, init_db
 from sqlmodel import Session as DBSession, select
 
 # Inicialização da Aplicação
@@ -110,38 +108,46 @@ class RabbitMQConnection:
 rabbitmq = RabbitMQConnection()
 
 
-def _unpack_semantic_llm_output(llm_output: Dict[str, Any]) -> Dict[str, Any]:
-    """Normaliza a saída da camada LLM para os contratos antigo e novo."""
-    # A API pública ainda expõe campos legados; este adaptador evita espalhar essa lógica pelo código.
-    structured = llm_output.get("structured_analysis", {}) or {}
-    narrative = llm_output.get("human_readable_summary") or structured.get("session_narrative", "")
-    psychometrics = {
-        "overall_confidence": structured.get("overall_confidence", 0.0),
-        "goal_hypothesis": structured.get("goal_hypothesis", {}),
-        "friction_points": structured.get("friction_points", []),
-        "progress_signals": structured.get("progress_signals", []),
+async def publish_job_message(payload: Dict[str, Any]) -> None:
+    """Publica um job assíncrono na fila de processamento."""
+    channel = await rabbitmq.get_channel()
+    await channel.default_exchange.publish(
+        aio_pika.Message(
+            body=json.dumps(payload).encode("utf-8"),
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+        ),
+        routing_key=settings.RABBITMQ_QUEUE,
+    )
+
+
+def _session_analysis_to_response(analysis: SessionAnalysis) -> SessionProcessResponse:
+    """Converte um registro persistido em uma resposta de processamento."""
+    narrative_block = analysis.narrative or {}
+    intent_block = analysis.intent_analysis or {}
+    structured_analysis = narrative_block.get("structured_analysis") or intent_block.get("structured_analysis")
+    llm_output = intent_block.get("llm_output")
+    semantic_bundle = narrative_block.get("semantic_bundle")
+    process_stats = analysis.process_stats or {}
+    stats_payload = process_stats if process_stats else {
+        "total_events": 0,
+        "kinematic_vectors": 0,
+        "user_actions": 0,
+        "ml_insights": 0,
+        "rage_clicks": 0,
     }
-    intent_analysis = {
-        "goal_hypothesis": structured.get("goal_hypothesis", {}),
-        "hypotheses": structured.get("hypotheses", []),
-        "overall_confidence": structured.get("overall_confidence", 0.0),
-    }
-    evidence_summary = structured.get("evidence_used", [])
-    hypotheses = structured.get("hypotheses", [])
-    data_quality = {
-        "ambiguities": structured.get("ambiguities", []),
-        "overall_confidence": structured.get("overall_confidence", 0.0),
-        "status": llm_output.get("status", "unknown"),
-    }
-    return {
-        "structured_analysis": structured,
-        "narrative": narrative,
-        "psychometrics": psychometrics,
-        "intent_analysis": intent_analysis,
-        "evidence_summary": evidence_summary,
-        "hypotheses": hypotheses,
-        "data_quality": data_quality,
-    }
+
+    return SessionProcessResponse(
+        session_uuid=analysis.session_uuid,
+        user_id=analysis.user_id,
+        narrative=narrative_block.get("text", ""),
+        psychometrics=analysis.psychometrics or {},
+        intent_analysis=intent_block.get("intent_analysis", {}),
+        insights=analysis.insights or [],
+        stats=SessionProcessStats(**stats_payload),
+        semantic_bundle=semantic_bundle,
+        llm_output=llm_output,
+        structured_analysis=structured_analysis,
+    )
 
 
 @app.on_event("startup")
@@ -367,99 +373,11 @@ async def register_user(
     )
 
 
-@app.post("/analyze", response_model=List[InsightEvent])
-async def analyze_session(request: AnalyzeRequest):
-    """
-    Endpoint de Análise de Baixo Nível (Heurísticas + ML).
-
-    Fluxo de Execução:
-    1. Pré-processamento O(N): Converte o JSON bruto do rrweb em estruturas otimizadas.
-    2. Isolation Forest: Detecta anomalias em movimentos de mouse usando vetores cinemáticos limpos.
-    3. Regras Determinísticas: Detecta 'Rage Clicks' baseando-se em padrões de clique rápido.
-
-    Args:
-        request (AnalyzeRequest): Payload contendo a lista de eventos brutos da sessão.
-
-    Returns:
-        List[InsightEvent]: Uma lista cronológica de eventos de insight (anomalias, frustrações).
-    """
-    # 1. Processamento O(N) - Separação de Buckets e Enriquecimento de DOM
-    # Otimização: Itera sobre os eventos uma única vez para gerar vetores e mapas de contexto.
-    processed = SessionPreprocessor.process(request.events)
-
-    # 2. Detecção de anomalias comportamentais via Aprendizado de Máquina
-    # Otimização: Passamos apenas a lista de vetores (timestamp, x, y) para o modelo,
-    # evitando overhead de processar dicionários complexos no numpy/scikit-learn.
-    insights_ml = detect_behavioral_anomalies(processed.kinematics)
-
-    # 3. Detecção de frustração técnica via regras de clique
-    # Mantemos o uso dos eventos brutos aqui pois a heurística de rage click pode depender
-    # de propriedades específicas do evento raw (embora pudesse ser adaptada para 'processed.actions').
-    insights_rule = detect_rage_clicks(request.events)
-
-    # Consolidação dos resultados para o player de replay
-    result = insights_ml + insights_rule
-    
-    return result
-
-@app.post("/analyze/semantic")
-async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
-    """
-    Endpoint de Análise de Alto Nível (Inteligência Semântica).
-
-    Interpreta o bundle semântico intermediário com um LLM controlado:
-    1. prepara o pacote de evidências
-    2. gera análise estruturada orientada a evidências
-    3. deriva uma narrativa humana curta da análise estruturada
-    4. preserva compatibilidade com os campos legados da API
-
-    Args:
-        request (AnalyzeRequest): Payload contendo a lista de eventos brutos.
-
-    Returns:
-        Dict[str, Any]: Um dicionário contendo a narrativa, a análise estruturada e os campos legados de compatibilidade.
-    """
-    processed = SessionPreprocessor.process(request.events)
-    semantic_bundle = build_semantic_session_bundle(request.events, processed)
-    llm_output = await semantic.generate_structured_session_analysis(semantic_bundle)
-    unpacked = _unpack_semantic_llm_output(llm_output)
-
-    # A resposta do endpoint continua compatível com o contrato anterior,
-    # mas a verdade analítica agora vem de structured_analysis.
-    narrative = unpacked["narrative"]
-    psychometrics = unpacked["psychometrics"]
-    intent = unpacked["intent_analysis"]
-    evidence_summary = unpacked["evidence_summary"]
-    hypotheses = unpacked["hypotheses"]
-    data_quality = unpacked["data_quality"]
-    structured_analysis = unpacked["structured_analysis"]
-
-    rage_clicks = [item for item in semantic_bundle.heuristic_events if item.type == "rage_click"]
-    repairs = []
-    if rage_clicks:
-        example_html = "<div class='btn-save'>Save Settings</div>"
-        repair = await semantic.semantic_code_repair(example_html, "click")
-        repairs.append(repair)
-
-    return {
-        "narrative": narrative,
-        "psychometrics": psychometrics,
-        "intent_analysis": intent,
-        "evidence_summary": evidence_summary,
-        "hypotheses": hypotheses,
-        "data_quality": data_quality,
-        "structured_analysis": structured_analysis,
-        "semantic_bundle": semantic_bundle.model_dump(mode="json"),
-        "suggested_repairs": repairs,
-        "llm_output": llm_output,
-    }
-
-
-@app.post("/ingest")
+@app.post("/ingest", response_model=SessionJobSubmissionResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_session(
     events: List[Dict[str, Any]],
     current_user: TokenData = Depends(get_current_user)
-) -> Dict[str, Any]:
+) -> SessionJobSubmissionResponse:
     """
     Endpoint de Ingestão de Telemetria (Protegido por OAuth2).
     
@@ -489,38 +407,25 @@ async def ingest_session(
         HTTPException: 401 Unauthorized se token for inválido ou ausente
         HTTPException: 500 Internal Server Error se falhar ao enviar para RabbitMQ
     """
-    # Gera UUID único da sessão
     session_uuid = str(uuid.uuid4())
-    
-    # Prepara payload da mensagem com metadados
+
     message_payload = {
+        "job_type": "ingest",
         "user_id": current_user.user_id,
         "session_uuid": session_uuid,
         "events": events,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
-    
+
     try:
-        # Obtém canal RabbitMQ
-        channel = await rabbitmq.get_channel()
-        
-        # Publica mensagem na fila
-        await channel.default_exchange.publish(
-            aio_pika.Message(
-                body=json.dumps(message_payload).encode('utf-8'),
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT
-            ),
-            routing_key=settings.RABBITMQ_QUEUE
+        await publish_job_message(message_payload)
+        return SessionJobSubmissionResponse(
+            status="queued",
+            message="Eventos da sessão enfileirados para processamento assíncrono",
+            session_uuid=session_uuid,
+            user_id=current_user.user_id,
         )
-        
-        return {
-            "status": "success",
-            "message": "Eventos da sessão ingeridos com sucesso",
-            "session_uuid": session_uuid,
-            "user_id": current_user.user_id,
-            "events_count": len(events)
-        }
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -528,219 +433,41 @@ async def ingest_session(
         )
 
 
-@app.post("/sessions/{session_uuid}/process", response_model=SessionProcessResponse)
-async def process_session(
+@app.get("/sessions/{session_uuid}/status", response_model=SessionJobStatusResponse)
+async def get_session_status(
     session_uuid: str,
     current_user: TokenData = Depends(get_current_user),
-    session: DBSession = Depends(get_session)
-) -> Dict[str, Any]:
+    session: DBSession = Depends(get_session),
+) -> SessionJobStatusResponse:
     """
-    Endpoint de Processamento de Sessão Completo (Protegido por OAuth2).
-    
-    Orquestra todo o pipeline de análise de UX para uma sessão específica:
-    1. Baixa os dados da sessão do Garage (S3)
-    2. Pré-processa os eventos brutos do rrweb
-    3. Executa análise de anomalias comportamentais (ML - Isolation Forest)
-    4. Detecta rage clicks (Heurística)
-    5. Monta o bundle semântico intermediário
-    6. Interpreta o bundle com o LLM estruturado
-    7. Persiste todos os resultados no banco de dados (SQLModel)
-    
-    Autenticação:
-    - Requer cabeçalho: Authorization: Bearer <JWT_TOKEN>
-    - Token deve ser emitido pelo janus-idp
-    - Token deve conter claims: sub (user_id), exp (expiration), iss (issuer)
-    
-    Args:
-        session_uuid: UUID da sessão a ser processada
-        current_user: TokenData extraído do JWT (injetado via dependência)
-        session: Sessão do banco de dados (injetada via dependência)
-        
-    Returns:
-        Dict contendo todos os resultados da análise:
-        - narrative: Resumo textual derivado de structured_analysis
-        - psychometrics: Estrutura legada derivada da análise estruturada
-        - intent_analysis: Estrutura legada derivada da análise estruturada
-        - structured_analysis: Contrato principal com evidências, hipóteses e confiança
-        - insights: Lista de eventos de insight (anomalias, rage clicks)
-        - session_uuid: UUID da sessão processada
-        
-    Raises:
-        HTTPException: 401 Unauthorized se token for inválido ou ausente
-        HTTPException: 404 Not Found se sessão não for encontrada no Garage
-        HTTPException: 500 Internal Server Error se falhar no processamento
+    Consulta o estado do processamento assíncrono de uma sessão.
     """
-    user_id = current_user.user_id
-    
-    # 1. Verifica ou cria o usuário no banco de dados local
-    try:
-        existing_user = session.get(User, user_id)
-        
-        if not existing_user:
-            # Cria o usuário se não existir
-            # Nota: O email pode não estar disponível no token, usamos um placeholder
-            new_user = User(
-                id=user_id,
-                email=f"{user_id}@janus-idp.local"
-            )
-            session.add(new_user)
-            session.commit()
-            print(f"✓ Usuário {user_id} criado no banco de dados local")
-    except Exception as e:
-        print(f"✗ Erro ao verificar/criar usuário: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao gerenciar usuário: {str(e)}"
+    statement = select(SessionAnalysis).where(
+        SessionAnalysis.session_uuid == session_uuid,
+        SessionAnalysis.user_id == current_user.user_id,
+    )
+    analysis = session.exec(statement).first()
+
+    if not analysis:
+        return SessionJobStatusResponse(
+            session_uuid=session_uuid,
+            user_id=current_user.user_id,
+            status="queued",
+            processing_error=None,
+            result=None,
         )
-    
-    # 2. Baixa os dados da sessão do Garage (S3)
-    try:
-        session_data = await storage_service.get_session_data(user_id, session_uuid)
-        print(f"✓ Dados da sessão {session_uuid} baixados do Garage")
-    except HTTPException as e:
-        # Repropaga exceções HTTP do StorageService
-        raise e
-    except Exception as e:
-        print(f"✗ Erro ao baixar sessão do Garage: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao acessar storage: {str(e)}"
-        )
-    
-    # 3. Converte o JSON bruto em objetos RRWebEvent
-    try:
-        raw_events = session_data.get("events", [])
-        rrweb_events = [
-            RRWebEvent(
-                type=event.get("type"),
-                data=event.get("data", {}),
-                timestamp=event.get("timestamp", 0)
-            )
-            for event in raw_events
-        ]
-        print(f"✓ {len(rrweb_events)} eventos RRWeb convertidos")
-    except Exception as e:
-        print(f"✗ Erro ao converter eventos RRWeb: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao processar eventos: {str(e)}"
-        )
-    
-    # 4. Executa o pipeline de análise
-    try:
-        print(f"Processando {len(rrweb_events)} eventos RRWeb")
-        processed = SessionPreprocessor.process(rrweb_events)
-        print(f"✓ {len(processed.kinematics)} vetores cinemáticos extraídos")
-        print(f"✓ Pré-processamento concluído: {len(processed.kinematics)} vetores, {len(processed.actions)} ações")
 
-        semantic_bundle = build_semantic_session_bundle(rrweb_events, processed)
-        print(f"✓ Bundle semântico intermediário gerado: {len(semantic_bundle.action_trace_compact)} ações compactadas")
+    result = None
+    if analysis.processing_status == "completed":
+        result = _session_analysis_to_response(analysis)
 
-        llm_output = await semantic.generate_structured_session_analysis(semantic_bundle)
-        print("✓ LLM semântico executado sobre o bundle intermediário")
-
-        unpacked = _unpack_semantic_llm_output(llm_output)
-        # Mantém o payload final legível para a API, mesmo que o modelo tenha retornado campos mais ricos.
-        narrative = unpacked["narrative"]
-        psychometrics = unpacked["psychometrics"]
-        intent_analysis = unpacked["intent_analysis"]
-        structured_analysis = unpacked["structured_analysis"]
-
-        # b) Detecção de anomalias comportamentais (ML - Isolation Forest)
-        insights_ml = detect_behavioral_anomalies(processed.kinematics)
-        print(f"✓ {len(insights_ml)} anomalias comportamentais detectadas")
-        
-        # c) Detecção de rage clicks (Heurística)
-        insights_rage = detect_rage_clicks(rrweb_events)
-        print(f"✓ {len(insights_rage)} rage clicks detectados")
-        
-        # Consolida todos os insights
-        all_insights = insights_ml + insights_rage
-        
-        # 5. Persiste os resultados no banco de dados
-        try:
-            # Busca análise existente por session_uuid
-            statement = select(SessionAnalysis).where(SessionAnalysis.session_uuid == session_uuid)
-            existing_analysis = session.exec(statement).first()
-            
-            if existing_analysis:
-                # Atualiza a análise existente
-                # Persistimos narrativa, bundle e análise estruturada juntos para manter rastreabilidade.
-                existing_analysis.narrative = {
-                    "text": narrative,
-                    "structured_analysis": structured_analysis,
-                    "semantic_bundle": semantic_bundle.model_dump(mode="json"),
-                }
-                existing_analysis.psychometrics = psychometrics
-                existing_analysis.intent_analysis = {
-                    "intent_analysis": intent_analysis,
-                    "structured_analysis": structured_analysis,
-                    "llm_output": llm_output,
-                }
-                existing_analysis.insights = [insight.dict() for insight in all_insights]
-                session.add(existing_analysis)
-                session.commit()
-                print(f"✓ Análise da sessão {session_uuid} atualizada no banco de dados")
-            else:
-                # Cria uma nova análise
-                # Novo registro segue o mesmo contrato de persistência para não divergir do caminho de update.
-                new_analysis = SessionAnalysis(
-                    session_uuid=session_uuid,
-                    user_id=user_id,
-                    narrative={
-                        "text": narrative,
-                        "structured_analysis": structured_analysis,
-                        "semantic_bundle": semantic_bundle.model_dump(mode="json"),
-                    },
-                    psychometrics=psychometrics,
-                    intent_analysis={
-                        "intent_analysis": intent_analysis,
-                        "structured_analysis": structured_analysis,
-                        "llm_output": llm_output,
-                    },
-                    insights=[insight.dict() for insight in all_insights]
-                )
-                session.add(new_analysis)
-                session.commit()
-                print(f"✓ Análise da sessão {session_uuid} criada no banco de dados")
-                
-        except Exception as e:
-            print(f"✗ Erro ao persistir análise no banco de dados: {e}")
-            # Não falha a requisição se a persistência falhar, apenas loga o erro
-            
-        # 6. Retorna os resultados completos
-        from models.models import SessionProcessStats
-        payload = {
-            "session_uuid": session_uuid,
-            "user_id": user_id,
-            # O campo narrative segue como compatibilidade externa; structured_analysis é a origem de verdade.
-            "narrative": narrative,
-            "psychometrics": psychometrics,
-            "intent_analysis": intent_analysis,
-            "insights": [insight.dict() for insight in all_insights],
-            "semantic_bundle": semantic_bundle.model_dump(mode="json"),
-            "llm_output": llm_output,
-            "structured_analysis": structured_analysis,
-            "stats": SessionProcessStats(
-                total_events=len(rrweb_events),
-                kinematic_vectors=len(processed.kinematics),
-                user_actions=len(processed.actions),
-                ml_insights=len(insights_ml),
-                rage_clicks=len(insights_rage)
-            ).dict()
-        }
-
-        print(f"process_session payload: {json.dumps(payload, ensure_ascii=False)}")
-
-        return payload
-        
-    except Exception as e:
-        print(f"✗ Erro no pipeline de análise: {type(e).__name__}: {e}")
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro ao processar sessão: {str(e)}"
-        )
+    return SessionJobStatusResponse(
+        session_uuid=session_uuid,
+        user_id=current_user.user_id,
+        status=analysis.processing_status,
+        processing_error=analysis.processing_error,
+        result=result,
+    )
 
 if __name__ == "__main__":
     # Execução do servidor via Uvicorn usando configurações do config.py

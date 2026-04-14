@@ -42,6 +42,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      ux-auditor-api-db:
+        condition: service_started
       minio:
         condition: service_started
     restart: unless-stopped

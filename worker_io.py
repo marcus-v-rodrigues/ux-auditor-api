@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 Worker IO - Processo em background para consumir mensagens do RabbitMQ
-e persisti-las no MinIO (S3-compatible storage).
+e executar o pipeline completo de análise em background.
+
+O worker persiste o payload bruto no MinIO/Garage, roda o pré-processamento,
+ML, heurísticas e LLM, e grava o resultado no PostgreSQL.
 
 Este worker implementa o padrão at-least-once delivery, garantindo que
 as mensagens sejam processadas mesmo em caso de falhas temporárias.
@@ -12,14 +15,16 @@ import json
 import logging
 import signal
 import sys
-from typing import Optional
-from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 import aio_pika
 import aioboto3
 from botocore.exceptions import BotoCoreError, ClientError
+from sqlmodel import Session as DBSession
 
 from config import settings
+from database import engine, init_db
+from services.session_job_processor import mark_analysis_status, process_session_events
 
 # Configuração de logging
 logging.basicConfig(
@@ -149,6 +154,23 @@ class MinIOStorageClient:
             logger.error(f"Erro inesperado durante upload: {e}")
             return False
 
+    async def download_session(self, user_id: str, session_uuid: str) -> dict:
+        """
+        Recupera os dados brutos de uma sessão já persistida no MinIO.
+        """
+        object_key = f"sessions/{user_id}/{session_uuid}.json"
+        try:
+            client = self._get_client()
+            response = await client.get_object(
+                Bucket=self.bucket_name,
+                Key=object_key,
+            )
+            content = await response["Body"].read()
+            return json.loads(content.decode("utf-8"))
+        except ClientError as e:
+            logger.error(f"Erro ao baixar sessão do MinIO: {e}")
+            raise
+
 
 class RabbitMQConsumer:
     """
@@ -167,7 +189,6 @@ class RabbitMQConsumer:
         self._connection: Optional[aio_pika.RobustConnection] = None
         self._channel: Optional[aio_pika.RobustChannel] = None
         self._queue: Optional[aio_pika.RobustQueue] = None
-        self._consumer_tag: Optional[str] = None
         self._running = False
 
     async def connect(self):
@@ -241,41 +262,90 @@ class RabbitMQConsumer:
                 # Extrair user_id e session_uuid da mensagem
                 user_id = message_data.get('user_id')
                 session_uuid = message_data.get('session_uuid')
+                job_type = message_data.get("job_type", "ingest")
                 
                 if not user_id or not session_uuid:
                     logger.error(
                         f"Mensagem inválida: user_id ou session_uuid ausentes. "
                         f"Conteúdo: {message_data}"
                     )
-                    # Rejeitar mensagem sem reentrega (não enviar ACK)
-                    return
-                
+                    raise aio_pika.exceptions.MessageProcessError(
+                        "Mensagem inválida: user_id ou session_uuid ausentes"
+                    )
+
                 logger.info(
-                    f"Processando sessão: user_id={user_id}, session_uuid={session_uuid}"
+                    f"Processando sessão: user_id={user_id}, session_uuid={session_uuid}, job_type={job_type}"
                 )
-                
-                # Fazer upload para o MinIO
-                upload_success = await self.storage_client.upload_session(
-                    user_id=user_id,
-                    session_uuid=session_uuid,
-                    session_data=message_data
-                )
-                
-                if upload_success:
-                    # Sucesso: o ACK será enviado automaticamente pelo context manager
-                    logger.info(
-                        f"Processamento concluído com sucesso | "
-                        f"Delivery Tag: {message.delivery_tag}"
+
+                raw_events: List[Dict[str, Any]]
+                if job_type == "ingest":
+                    raw_events = message_data.get("events", [])
+                    if not isinstance(raw_events, list):
+                        raise aio_pika.exceptions.MessageProcessError(
+                            "Campo 'events' inválido na mensagem de ingestão"
+                        )
+
+                    upload_success = await self.storage_client.upload_session(
+                        user_id=user_id,
+                        session_uuid=session_uuid,
+                        session_data=message_data,
                     )
+
+                    if not upload_success:
+                        logger.warning(
+                            f"Falha no upload. Mensagem será reprocessada. "
+                            f"Delivery Tag: {message.delivery_tag}"
+                        )
+                        raise Exception("Upload para MinIO falhou")
+                elif job_type == "reprocess":
+                    try:
+                        stored_session = await self.storage_client.download_session(user_id, session_uuid)
+                    except ClientError as e:
+                        error_code = e.response.get('Error', {}).get('Code')
+                        if error_code in {"NoSuchKey", "NotFound"}:
+                            raise aio_pika.exceptions.MessageProcessError(
+                                f"Sessão não encontrada no storage: {session_uuid}"
+                            )
+                        raise
+                    raw_events = stored_session.get("events", [])
+                    if not isinstance(raw_events, list):
+                        raise aio_pika.exceptions.MessageProcessError(
+                            "Sessão armazenada sem lista válida de eventos"
+                        )
                 else:
-                    # Falha: não enviar ACK (a mensagem será reprocessada)
-                    logger.warning(
-                        f"Falha no upload. Mensagem será reprocessada. "
-                        f"Delivery Tag: {message.delivery_tag}"
+                    raise aio_pika.exceptions.MessageProcessError(
+                        f"job_type desconhecido: {job_type}"
                     )
-                    # O context manager não enviará ACK se ocorrer uma exceção
-                    # Aqui precisamos lançar uma exceção para impedir o ACK
-                    raise Exception("Upload para MinIO falhou")
+
+                with DBSession(engine) as db_session:
+                    mark_analysis_status(
+                        db_session,
+                        user_id=user_id,
+                        session_uuid=session_uuid,
+                        status="processing",
+                    )
+
+                    try:
+                        await process_session_events(
+                            session=db_session,
+                            user_id=user_id,
+                            session_uuid=session_uuid,
+                            raw_events=raw_events,
+                        )
+                    except Exception as processing_error:
+                        mark_analysis_status(
+                            db_session,
+                            user_id=user_id,
+                            session_uuid=session_uuid,
+                            status="failed",
+                            processing_error=str(processing_error),
+                        )
+                        raise
+
+                logger.info(
+                    f"Processamento concluído com sucesso | "
+                    f"Delivery Tag: {message.delivery_tag}"
+                )
                     
             except json.JSONDecodeError as e:
                 logger.error(f"Erro ao decodificar JSON: {e}")
@@ -354,6 +424,8 @@ class WorkerIO:
         Inicializa os componentes do worker.
         """
         logger.info("Inicializando Worker IO...")
+
+        init_db()
         
         # Inicializar cliente de storage
         self.storage_client = MinIOStorageClient(

@@ -37,6 +37,18 @@ O sistema segue uma arquitetura orientada a serviços e processamento assíncron
     *   **Análise de Alto Nível:** LLM interpreta apenas o bundle semântico intermediário e produz análise estruturada.
 4.  **Persistência:** Resultados consolidados em banco de dados **PostgreSQL** via **SQLModel**.
 
+## Contrato do Frontend
+
+O frontend não espera a request terminar o processamento pesado. O fluxo correto é:
+
+1. chamar `POST /ingest`
+2. guardar o `session_uuid` retornado
+3. consultar `GET /sessions/{session_uuid}/status` em polling
+4. tratar `status == completed` como pronto
+5. tratar `status == failed` como erro de processamento
+
+Enquanto `status` estiver em `queued` ou `processing`, a sessão ainda não terminou.
+
 ## Fundamentação Matemática
 O sistema combina geometria computacional para análise cinemática, heurísticas determinísticas e um estágio de interpretação semântica controlada.
 

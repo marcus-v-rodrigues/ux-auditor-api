@@ -10,9 +10,9 @@ from models.models import (
 from . import prompts
 
 # --- Configurações de Ambiente ---
-API_TOKEN: str = os.getenv("AI_API_TOKEN") or os.getenv("CHUTES_API_TOKEN") or ""
-LLM_URL: str = os.getenv("AI_LLM_URL") or "https://llm.chutes.ai/v1/chat/completions"
-LLM_MODEL: str = os.getenv("AI_LLM_MODEL") or "NousResearch/Hermes-4-405B-FP8-TEE"
+API_TOKEN: str = os.getenv("AI_API_TOKEN") or ""
+LLM_URL: str = os.getenv("AI_LLM_URL") or ""
+LLM_MODEL: str = os.getenv("AI_LLM_MODEL") or ""
 
 async def _post_ai_service(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -56,16 +56,16 @@ def _bundle_to_payload(bundle: Union[SemanticSessionBundle, Dict[str, Any]]) -> 
 
     return {
         "analysis_context": {
-            "source": "semantic_session_bundle",
-            "schema_version": "v1",
-            "objective": "interpretacao_controlada_de_sessao",
-            "constraints": [
-                "usar_apenas_o_bundle_semantico",
-                "separar_observacao_de_inferencia",
-                "manter_confidence_e_ambiguities",
-                "nao_inventar_eventos",
-            ],
-        },
+                "source": "semantic_session_bundle",
+                "schema_version": "v1",
+                "objective": "Interpretacao controlada da sessao",
+                "constraints": [
+                    "Use apenas as evidencias presentes no bundle semantico.",
+                    "Separe claramente observacao, sinal derivado e inferencia.",
+                    "Mantenha campos de confidence e ambiguities na resposta.",
+                    "Nao invente eventos, fatos ou intencoes nao presentes no input.",
+                ],
+            },
         "session_bundle": bundle_dict,
     }
 

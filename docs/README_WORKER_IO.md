@@ -4,9 +4,11 @@
 
 O [`worker_io.py`](worker_io.py) é um processo em background assíncrono que:
 
-1. **Consome mensagens** do RabbitMQ (fila `raw_sessions`)
-2. **Persiste os dados** no Garage (S3-compatible storage)
-3. **Implementa at-least-once delivery** para garantir processamento confiável
+1. **Consome jobs** do RabbitMQ (fila `raw_sessions`)
+2. **Persiste os dados brutos** no Garage (S3-compatible storage)
+3. **Executa o pipeline completo** de análise de UX em background
+4. **Grava o resultado** no PostgreSQL
+5. **Implementa at-least-once delivery** para garantir processamento confiável
 
 ## Arquitetura
 
@@ -20,6 +22,11 @@ O [`worker_io.py`](worker_io.py) é um processo em background assíncrono que:
                                       ┌─────────────┐
                                       │   Garage    │
                                       │ (S3 Storage)│
+                                      └─────────────┘
+
+                                      ┌─────────────┐
+                                      │ PostgreSQL  │
+                                      │  (Results)  │
                                       └─────────────┘
 ```
 
@@ -94,18 +101,27 @@ docker-compose down
 
 ### 2. Integração com Garage (S3)
 
-- Cliente [`GarageStorageClient`](worker_io.py:38) usando [`aioboto3`](worker_io.py:19)
+- Cliente `MinIOStorageClient` usando [`aioboto3`](worker_io.py:19)
 - Cria automaticamente o bucket se não existir
 - Upload assíncrono com [`put_object()`](worker_io.py:97)
 
-### 3. At-Least-Once Delivery
+### 3. Pipeline de Processamento
+
+- Pré-processamento O(N) de eventos rrweb
+- Detecção de anomalias com `IsolationForest`
+- Detecção determinística de rage clicks
+- Montagem do bundle semântico e execução do LLM estruturado
+- Persistência de resultado em `session_analyses`
+
+### 4. At-Least-Once Delivery
 
 O worker garante que cada mensagem seja processada pelo menos uma vez:
 
 1. **Recebe mensagem** do RabbitMQ
-2. **Processa e faz upload** para o Garage
-3. **Só envia ACK** após confirmação de sucesso
-4. **Em caso de falha**: não envia ACK, mensagem é reprocessada
+2. **Persiste o payload bruto** no Garage
+3. **Executa o pipeline de análise** e persiste o resultado
+4. **Só envia ACK** após confirmação de sucesso
+5. **Em caso de falha**: não envia ACK, mensagem é reprocessada
 
 ### 4. Resiliência
 
