@@ -259,6 +259,84 @@ class SemanticSessionBundle(BaseModel):
     derived_signals: Dict[str, Any] = Field(default_factory=dict)
 
 
+class GoalHypothesis(BaseModel):
+    """Hipótese principal sobre o objetivo da sessão."""
+    value: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    justification: str = ""
+
+
+class BehavioralPattern(BaseModel):
+    """Padrão comportamental interpretado a partir das evidências."""
+    label: str
+    description: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    supporting_evidence: List[str] = Field(default_factory=list)
+
+
+class FrictionPoint(BaseModel):
+    """Ponto de fricção inferido a partir dos sinais observados."""
+    label: str
+    description: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    supporting_evidence: List[str] = Field(default_factory=list)
+
+
+class ProgressSignal(BaseModel):
+    """Sinal de progresso ou avanço funcional na sessão."""
+    label: str
+    description: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    supporting_evidence: List[str] = Field(default_factory=list)
+
+
+class AmbiguityItem(BaseModel):
+    """Leitura alternativa ou incerteza explícita sobre a interpretação."""
+    label: str
+    description: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    alternative_readings: List[str] = Field(default_factory=list)
+    supporting_evidence: List[str] = Field(default_factory=list)
+
+
+class SessionHypothesis(BaseModel):
+    """Hipótese interpretativa secundária."""
+    statement: str
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    type: str
+    justification: str = ""
+    evidence_refs: List[str] = Field(default_factory=list)
+
+
+class StructuredSessionAnalysis(BaseModel):
+    """
+    Saída estruturada principal da camada LLM.
+    Serve como fonte de verdade para análises semânticas de sessão.
+    """
+    session_narrative: str = ""
+    goal_hypothesis: GoalHypothesis = Field(default_factory=GoalHypothesis)
+    behavioral_patterns: List[BehavioralPattern] = Field(default_factory=list)
+    friction_points: List[FrictionPoint] = Field(default_factory=list)
+    progress_signals: List[ProgressSignal] = Field(default_factory=list)
+    ambiguities: List[AmbiguityItem] = Field(default_factory=list)
+    hypotheses: List[SessionHypothesis] = Field(default_factory=list)
+    evidence_used: List[str] = Field(default_factory=list)
+    overall_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class LLMAnalysisResult(BaseModel):
+    """
+    Envelope de resposta da etapa interpretativa via LLM.
+    Mantém a análise estruturada e uma narrativa humana derivada.
+    """
+    status: str = "ok"
+    structured_analysis: StructuredSessionAnalysis
+    human_readable_summary: str = ""
+    structured_fallback: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    prompt_version: str = "v1"
+
+
 class SessionProcessResponse(BaseModel):
     """
     Resposta completa do processamento de sessão.
@@ -273,6 +351,7 @@ class SessionProcessResponse(BaseModel):
     stats: SessionProcessStats
     semantic_bundle: Optional[Dict[str, Any]] = None
     llm_output: Optional[Dict[str, Any]] = None
+    structured_analysis: Optional[Dict[str, Any]] = None
 
 
 class RegisterRequest(BaseModel):

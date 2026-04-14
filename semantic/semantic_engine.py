@@ -1,18 +1,18 @@
 import os
 import json
 import aiohttp
-import numpy as np
-from typing import List, Dict, Any, Union
-from services.data_processor import UserAction
-from models.models import SemanticSessionBundle
+from typing import List, Dict, Any, Union, Optional
+from models.models import (
+    LLMAnalysisResult,
+    SemanticSessionBundle,
+    StructuredSessionAnalysis,
+)
 from . import prompts
 
 # --- Configurações de Ambiente ---
 API_TOKEN: str = os.getenv("AI_API_TOKEN") or os.getenv("CHUTES_API_TOKEN") or ""
 LLM_URL: str = os.getenv("AI_LLM_URL") or "https://llm.chutes.ai/v1/chat/completions"
-EMBEDDING_URL: str = os.getenv("AI_EMBEDDING_URL") or "https://llm.chutes.ai/v1/embeddings"
 LLM_MODEL: str = os.getenv("AI_LLM_MODEL") or "NousResearch/Hermes-4-405B-FP8-TEE"
-EMBEDDING_MODEL: str = os.getenv("AI_EMBEDDING_MODEL") or "Qwen/Qwen3-Embedding-8B"
 
 async def _post_ai_service(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -35,113 +35,184 @@ def _extract_json_content(content: str) -> str:
     # Normalização do json, pois muitos provedores devolvem JSON embrulhado em fences
     if "```json" in content:
         content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-    return content.strip()
+    content = content.strip()
+    if not content:
+        return content
+    if content.startswith("{") and content.endswith("}"):
+        return content
+    first = content.find("{")
+    last = content.rfind("}")
+    if first != -1 and last != -1 and last > first:
+        return content[first:last + 1].strip()
+    return content
 
-def generate_session_narrative(actions: List[UserAction]) -> str:
-    """
-    Motor de Geração de Linguagem Natural (NLG).
-    Transforma ações processadas do usuário em uma narrativa semântica rica.
-    
-    Analisa:
-    - Navegação (URLs)
-    - Interações explícitas (cliques, inputs)
-    - Hesitações (tempo de inatividade > 3s)
-    - Redimensionamento de viewport
-    """
-    if not actions: return "Nenhum evento encontrado."
 
-    narrative = []
-    start_time = actions[0].timestamp
-    last_event_time = start_time
-    
-    for action in actions:
-        time_offset = (action.timestamp - start_time) / 1000
-        idle_time = (action.timestamp - last_event_time) / 1000
-        
-        # Detecção de Hesitação: indicador chave de Carga Cognitiva elevada
-        if idle_time > 3.0:
-            narrative.append(f"O usuário hesitou ou refletiu por {idle_time:.1f}s.")
+def _bundle_to_payload(bundle: Union[SemanticSessionBundle, Dict[str, Any]]) -> Dict[str, Any]:
+    # O LLM recebe um envelope explícito para deixar claro o contrato e evitar improviso de formato.
+    if hasattr(bundle, "model_dump"):
+        bundle_dict = bundle.model_dump(mode="json")
+    else:
+        bundle_dict = dict(bundle)
 
-        if action.action_type == 'navigation':
-            narrative.append(f"Aos {time_offset:.1f}s, {action.details}")
-        elif action.action_type == 'click':
-            narrative.append(f"Aos {time_offset:.1f}s, clicou em {action.details}")
-        elif action.action_type == 'input':
-            narrative.append(f"Aos {time_offset:.1f}s, {action.details}")
-        elif action.action_type == 'resize':
-            narrative.append(f"Aos {time_offset:.1f}s, {action.details}")
+    return {
+        "analysis_context": {
+            "source": "semantic_session_bundle",
+            "schema_version": "v1",
+            "objective": "interpretacao_controlada_de_sessao",
+            "constraints": [
+                "usar_apenas_o_bundle_semantico",
+                "separar_observacao_de_inferencia",
+                "manter_confidence_e_ambiguities",
+                "nao_inventar_eventos",
+            ],
+        },
+        "session_bundle": bundle_dict,
+    }
 
-        last_event_time = action.timestamp
 
-    return " ".join(narrative)
+def _extract_top_evidence(bundle_payload: Dict[str, Any], limit: int = 12) -> List[str]:
+    # Lista curta de sinais mais úteis para fallback e auditoria humana.
+    evidence: List[str] = []
+    for key in ("heuristic_events", "candidate_meaningful_moments"):
+        for item in bundle_payload.get("session_bundle", {}).get(key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            evidence_type = item.get("type")
+            metrics = item.get("metrics") or {}
+            descriptor = evidence_type or "unknown_evidence"
+            if metrics.get("count") is not None:
+                descriptor = f"{descriptor} count={metrics.get('count')}"
+            if item.get("target_group"):
+                descriptor = f"{descriptor} target_group={item.get('target_group')}"
+            if item.get("duration_ms") is not None:
+                descriptor = f"{descriptor} duration_ms={item.get('duration_ms')}"
+            evidence.append(descriptor)
+            if len(evidence) >= limit:
+                return evidence
 
-async def analyze_psychometrics(narrative: str) -> Dict[str, Any]:
-    """
-    Utiliza LLMs de alta escala para realizar inferência psicométrica qualitativa.
-    Avalia Frustração e Carga Cognitiva baseando-se na narrativa de eventos.
-    """
-    if not narrative: return {"frustration_score": 0, "cognitive_load_score": 0, "reasoning": "No data"}
+    signals = bundle_payload.get("session_bundle", {}).get("derived_signals", {}) or {}
+    for key, value in signals.items():
+        evidence.append(f"{key}={value}")
+        if len(evidence) >= limit:
+            break
+    return evidence
+
+
+def _validate_or_normalize_structured_analysis(payload: Dict[str, Any]) -> StructuredSessionAnalysis:
+    # Aceita envelope ou payload cru e normaliza tudo para o mesmo contrato interno.
+    if "structured_analysis" in payload and isinstance(payload["structured_analysis"], dict):
+        payload = payload["structured_analysis"]
+    return StructuredSessionAnalysis.model_validate(payload)
+
+
+def _build_fallback_analysis(bundle_payload: Dict[str, Any], error_message: str) -> LLMAnalysisResult:
+    # Fallback conservador: preserva evidência e evita inventar interpretação quando o LLM falha.
+    evidence_used = _extract_top_evidence(bundle_payload)
+    fallback_analysis = StructuredSessionAnalysis(
+        session_narrative="Evidência insuficiente para uma interpretação robusta da sessão.",
+        goal_hypothesis={
+            "value": "insuficiente para inferir com segurança",
+            "confidence": 0.0,
+            "justification": "A camada LLM não conseguiu validar uma interpretação estável a partir do bundle intermediário.",
+        },
+        behavioral_patterns=[],
+        friction_points=[],
+        progress_signals=[],
+        ambiguities=[
+            {
+                "label": "baixa_evidencia",
+                "description": "A evidência disponível não foi suficiente para sustentar uma interpretação mais forte.",
+                "confidence": 0.0,
+                "alternative_readings": [
+                    "o fluxo pode estar incompleto",
+                    "o usuário pode ter executado um fluxo simples sem sinais fortes",
+                ],
+                "supporting_evidence": evidence_used[:5],
+            }
+        ],
+        hypotheses=[],
+        evidence_used=evidence_used,
+        overall_confidence=0.0,
+    )
+    return LLMAnalysisResult(
+        status="error",
+        structured_analysis=fallback_analysis,
+        human_readable_summary=generate_human_readable_narrative(fallback_analysis),
+        structured_fallback=bundle_payload.get("session_bundle"),
+        error=error_message,
+    )
+
+
+def generate_human_readable_narrative(structured_analysis: Union[StructuredSessionAnalysis, Dict[str, Any]]) -> str:
+    """Deriva uma síntese humana curta a partir da saída estruturada."""
+    if isinstance(structured_analysis, dict):
+        try:
+            structured_analysis = StructuredSessionAnalysis.model_validate(structured_analysis)
+        except Exception:
+            return "Resumo indisponível: a análise estruturada não pôde ser normalizada."
+
+    parts: List[str] = []
+    if structured_analysis.session_narrative:
+        parts.append(structured_analysis.session_narrative.strip())
+
+    goal = structured_analysis.goal_hypothesis
+    if goal.value:
+        parts.append(f"Hipótese principal de objetivo: {goal.value} (confiança {goal.confidence:.2f}).")
+
+    if structured_analysis.friction_points:
+        labels = ", ".join(item.label for item in structured_analysis.friction_points[:3] if item.label)
+        if labels:
+            parts.append(f"Pontos de fricção prováveis: {labels}.")
+
+    if structured_analysis.progress_signals:
+        labels = ", ".join(item.label for item in structured_analysis.progress_signals[:3] if item.label)
+        if labels:
+            parts.append(f"Sinais de progresso: {labels}.")
+
+    if structured_analysis.ambiguities:
+        parts.append("Há ambiguidades relevantes que impedem conclusões fortes em alguns trechos.")
+
+    if not parts:
+        return "Resumo indisponível: a análise não trouxe sinais suficientes para uma narrativa confiável."
+
+    return " ".join(parts)
+
+
+async def _call_llm_for_structured_analysis(payload_json: str, *, retry: bool = False, previous_response: Optional[str] = None, validation_error: Optional[str] = None) -> Dict[str, Any]:
+    # A mensagem de sistema define o papel epistemológico; a de developer fixa o contrato de saída.
+    messages = [
+        {"role": "system", "content": prompts.SEMANTIC_INTERPRETATION_SYSTEM},
+        {"role": "developer", "content": prompts.SEMANTIC_INTERPRETATION_INSTRUCTION},
+    ]
+
+    if retry and previous_response and validation_error:
+        messages.append(
+            {
+                "role": "user",
+                "content": prompts.SEMANTIC_INTERPRETATION_RETRY.format(
+                    validation_error=validation_error,
+                    previous_response=previous_response,
+                ),
+            }
+        )
+    else:
+        messages.append(
+            {
+                "role": "user",
+                "content": prompts.SEMANTIC_INTERPRETATION_USER.format(payload_json=payload_json),
+            }
+        )
 
     body = {
         "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": prompts.PSYCHOMETRICS_SYSTEM},
-            {"role": "user", "content": prompts.PSYCHOMETRICS_USER.format(narrative=narrative)}
-        ],
-        "temperature": 0.3
+        "messages": messages,
+        "temperature": 0.2,
+        "top_p": 1.0,
     }
-
-    try:
-        res = await _post_ai_service(LLM_URL, body)
-        content = res['choices'][0]['message']['content']
-        return json.loads(_extract_json_content(content))
-    except Exception as e:
-        return {"error": str(e), "frustration_score": -1, "reasoning": "LLM inference failed."}
-
-async def analyze_journey_coherence(urls_visited: List[str]) -> Dict[str, Any]:
-    """
-    Análise Híbrida de Jornada (Quantitativa + Qualitativa).
-    
-    1. Quantitativo: Usa Embeddings para calcular a similaridade de cosseno entre estados.
-       Detecta matematicamente loops ou estagnação semântica (Estagnação > 0.9).
-    2. Qualitativo: Usa LLM para interpretar o propósito da navegação no sistema.
-    """
-    if len(urls_visited) < 2:
-        return {"status": "starting", "reasoning": "Insufficient data to analyze journey."}
-
-    # Análise Matemática via Embeddings
-    try:
-        emb_res = await _post_ai_service(EMBEDDING_URL, {"model": EMBEDDING_MODEL, "input": urls_visited})
-        vectors = [np.array(item['embedding']) for item in emb_res['data']]
-        similarities = [float(np.dot(vectors[i], vectors[i+1]) / (np.linalg.norm(vectors[i]) * np.linalg.norm(vectors[i+1]))) for i in range(len(vectors)-1)]
-        avg_sim = np.mean(similarities)
-        stagnation = True if avg_sim > 0.9 else False
-    except Exception:
-        avg_sim, stagnation = 0, False
-
-    # Análise Qualitativa via LLM
-    body = {
-        "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": prompts.JOURNEY_ANALYSIS_SYSTEM},
-            {"role": "user", "content": prompts.JOURNEY_ANALYSIS_USER.format(urls=" -> ".join(urls_visited))}
-        ],
-        "temperature": 0.1
-    }
-
-    try:
-        llm_res = await _post_ai_service(LLM_URL, body)
-        content = llm_res['choices'][0]['message']['content']
-        content = _extract_json_content(content)
-        
-        analysis = json.loads(content)
-        analysis["quantitative_metrics"] = {
-            "avg_semantic_similarity": round(float(avg_sim), 4),
-            "semantic_stagnation_detected": stagnation
-        }
-        return analysis
-    except Exception as e:
-        return {"status": "error", "reasoning": str(e)}
+    res = await _post_ai_service(LLM_URL, body)
+    content = res["choices"][0]["message"]["content"]
+    parsed = json.loads(_extract_json_content(content))
+    return {"raw_content": content, "parsed": parsed}
 
 async def semantic_code_repair(html_snippet: str, interaction_type: str) -> Dict[str, Any]:
     """
@@ -164,28 +235,49 @@ async def semantic_code_repair(html_snippet: str, interaction_type: str) -> Dict
         return {"original_html": html_snippet, "explanation": str(e)}
 
 
-async def analyze_semantic_bundle(bundle: Union[SemanticSessionBundle, Dict[str, Any]]) -> Dict[str, Any]:
+async def generate_structured_session_analysis(bundle: Union[SemanticSessionBundle, Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Envia o JSON intermediário compacto para o LLM e recebe narrativa e hipóteses.
-    """
-    if hasattr(bundle, "model_dump"):
-        bundle_json = json.dumps(bundle.model_dump(mode="json"), ensure_ascii=False)
-    else:
-        bundle_json = json.dumps(bundle, ensure_ascii=False)
+    Interpreta o bundle semântico intermediário com uma camada LLM controlada.
 
-    body = {
-        "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": prompts.SEMANTIC_BUNDLE_SYSTEM},
-            {"role": "user", "content": prompts.SEMANTIC_BUNDLE_USER.format(bundle_json=bundle_json)},
-        ],
-        # Temperatura baixa para reorganização fiel, não invenção.
-        "temperature": 0.2,
-    }
+    A resposta estruturada é a fonte de verdade; a narrativa humana é derivada dela.
+    """
+    payload = _bundle_to_payload(bundle)
+    payload_json = json.dumps(payload, ensure_ascii=False)
 
     try:
-        res = await _post_ai_service(LLM_URL, body)
-        content = res["choices"][0]["message"]["content"]
-        return json.loads(_extract_json_content(content))
-    except Exception as e:
-        return {"error": str(e), "status": "error", "reasoning": "LLM inference failed."}
+        # Primeira tentativa: resposta direta no contrato esperado.
+        llm_res = await _call_llm_for_structured_analysis(payload_json)
+        structured_analysis = _validate_or_normalize_structured_analysis(llm_res["parsed"])
+        result = LLMAnalysisResult(
+            status="ok",
+            structured_analysis=structured_analysis,
+            human_readable_summary=generate_human_readable_narrative(structured_analysis),
+            structured_fallback=None,
+            error=None,
+        )
+        return result.model_dump(mode="json")
+    except Exception as first_error:
+        try:
+            # Segunda tentativa: pede correção explícita se o JSON vier fora do contrato.
+            previous_response = ""
+            if 'llm_res' in locals():
+                previous_response = llm_res.get("raw_content", "")
+            corrective = await _call_llm_for_structured_analysis(
+                payload_json,
+                retry=True,
+                previous_response=previous_response,
+                validation_error=str(first_error),
+            )
+            structured_analysis = _validate_or_normalize_structured_analysis(corrective["parsed"])
+            result = LLMAnalysisResult(
+                status="ok",
+                structured_analysis=structured_analysis,
+                human_readable_summary=generate_human_readable_narrative(structured_analysis),
+                structured_fallback=None,
+                error=None,
+            )
+            return result.model_dump(mode="json")
+        except Exception as second_error:
+            # Se a interpretação falhar duas vezes, devolve um fallback auditável e conservador.
+            fallback = _build_fallback_analysis(payload, str(second_error))
+            return fallback.model_dump(mode="json")

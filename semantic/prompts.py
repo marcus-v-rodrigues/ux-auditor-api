@@ -1,62 +1,101 @@
-# --- System Prompts ---
-
-PSYCHOMETRICS_SYSTEM = "Você é um especialista em UX e Psicologia Cognitiva. Responda estritamente em JSON."
-
-SEMANTIC_REPAIR_SYSTEM = "Você é um especialista em Acessibilidade Web (WCAG) e WAI-ARIA. Responda estritamente em JSON."
-
-JOURNEY_ANALYSIS_SYSTEM = "Você é um analista de fluxos de navegação. Sua tarefa é identificar se uma sequência de URLs indica progresso ou confusão."
-
-SEMANTIC_BUNDLE_SYSTEM = (
-    "Você é um analista de UX e comportamento de interação. "
-    "Receba um JSON com fatos observáveis e evidências estruturadas. "
-    "Não invente fatos. Não trate evidências como inferências finais. "
+SEMANTIC_INTERPRETATION_SYSTEM = (
+    "Você é um analista especializado em Interação Humano-Computador, análise comportamental e interpretação de sessões digitais. "
+    "Sua tarefa é interpretar evidências estruturadas extraídas de uma sessão de usuário. "
+    "Você deve inferir padrões prováveis, construir uma narrativa coerente, identificar fricções e progresso, levantar hipóteses com confiança e explicar a relação entre evidência e conclusão. "
+    "Você não deve inventar eventos ausentes, afirmar intenção, emoção ou estado mental como fato, ignorar ambiguidades ou produzir texto fora do JSON solicitado. "
     "Responda estritamente em JSON."
 )
 
-# --- User Prompts (Templates) ---
+SEMANTIC_INTERPRETATION_INSTRUCTION = """
+Analise a sessão com base apenas nas evidências estruturadas fornecidas.
 
-PSYCHOMETRICS_USER = """
-Analise a frustração (0-10) e carga cognitiva (0-10) desta sessão de usuário: {narrative}. 
-Justifique sua resposta com base nos eventos descritos. 
-Retorne um JSON com os campos: frustration_score (int), cognitive_load_score (int) e reasoning (str).
+Regras obrigatórias:
+1. Não invente eventos não presentes no input.
+2. Não trate hipótese como fato.
+3. Diferencie observação, sinal derivado e inferência.
+4. Se a evidência for insuficiente, diga que é insuficiente.
+5. Não conclua frustração, carga cognitiva ou intenção como fato.
+6. Use linguagem analítica e probabilística: "sugere", "indica", "é compatível com", "pode refletir", "há evidência de", "não é possível afirmar com certeza".
+7. Use explicitamente o campo evidence_used para mostrar em que se baseou.
+8. Retorne apenas JSON válido e completo.
+
+Formato de saída obrigatório:
+{
+  "session_narrative": "",
+  "goal_hypothesis": {
+    "value": "",
+    "confidence": 0.0,
+    "justification": ""
+  },
+  "behavioral_patterns": [
+    {
+      "label": "",
+      "description": "",
+      "confidence": 0.0,
+      "supporting_evidence": []
+    }
+  ],
+  "friction_points": [
+    {
+      "label": "",
+      "description": "",
+      "confidence": 0.0,
+      "supporting_evidence": []
+    }
+  ],
+  "progress_signals": [
+    {
+      "label": "",
+      "description": "",
+      "confidence": 0.0,
+      "supporting_evidence": []
+    }
+  ],
+  "ambiguities": [
+    {
+      "label": "",
+      "description": "",
+      "confidence": 0.0,
+      "alternative_readings": [],
+      "supporting_evidence": []
+    }
+  ],
+  "hypotheses": [
+    {
+      "statement": "",
+      "confidence": 0.0,
+      "type": "goal|difficulty|exploration|reconsideration|friction|nonlinear_flow",
+      "justification": "",
+      "evidence_refs": []
+    }
+  ],
+  "evidence_used": [],
+  "overall_confidence": 0.0
+}
 """
+
+SEMANTIC_INTERPRETATION_USER = """
+Analise o seguinte pacote semântico intermediário de uma sessão rrweb.
+
+{payload_json}
+"""
+
+SEMANTIC_INTERPRETATION_RETRY = """
+O JSON anterior não obedeceu ao contrato esperado.
+
+Erro de validação:
+{validation_error}
+
+Resposta anterior:
+{previous_response}
+
+Reescreva a saída para que seja um JSON válido, completo e compatível com o contrato. Retorne apenas o JSON final.
+"""
+
+SEMANTIC_REPAIR_SYSTEM = "Você é um especialista em Acessibilidade Web (WCAG) e WAI-ARIA. Responda estritamente em JSON."
 
 SEMANTIC_REPAIR_USER = """
 O usuário tentou realizar a ação '{interaction_type}' no seguinte elemento HTML: {html_snippet}. 
 O elemento atual é semanticamente correto para essa ação? Se não, reescreva o código HTML corrigido para ser acessível. 
 Retorne um JSON com os campos: original_html, fixed_html e explanation.
-"""
-
-JOURNEY_ANALYSIS_USER = """
-Analise a seguinte sequência de URLs visitadas por um usuário:
-{urls}
-
-Com base na semântica das URLs, o usuário parece estar:
-1. Em uma progressão lógica para concluir uma tarefa?
-2. Em um loop (visitando páginas similares sem avançar)?
-3. Navegando de forma errática/aleatória?
-
-Retorne um JSON com os campos:
-- status: "progressing" | "looping" | "erratic"
-- reasoning: "Sua explicação técnica"
-- confidence_score: (0-10)
-"""
-
-SEMANTIC_BUNDLE_USER = """
-Analise o seguinte pacote semântico intermediário de uma sessão rrweb.
-
-{bundle_json}
-
-Produza um JSON com os campos:
-- narrative: texto curto em linguagem natural, baseado apenas nas evidências
-- psychometrics: objeto com frustration_score, cognitive_load_score e reasoning
-- intent_analysis: objeto com status, reasoning e confidence_score
-- evidence_summary: lista de evidências mais relevantes para revisão humana
-- hypotheses: lista de hipóteses, deixando explícito que são hipóteses
-- data_quality: objeto com observações sobre cobertura, ruído e limitações
-
-Regras:
-- Não atribua intenção, emoção ou estado mental como fato.
-- Use apenas as evidências fornecidas.
-- Se faltar informação, declare a limitação.
 """

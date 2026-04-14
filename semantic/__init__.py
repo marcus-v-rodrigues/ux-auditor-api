@@ -1,16 +1,12 @@
 # Semantic package
 from .semantic_engine import (
-    generate_session_narrative,
-    analyze_psychometrics,
-    analyze_journey_coherence,
     semantic_code_repair,
-    analyze_semantic_bundle,
+    generate_structured_session_analysis,
+    generate_human_readable_narrative,
 )
 
 __all__ = [
-    'generate_session_narrative',
-    'analyze_psychometrics',
-    'analyze_journey_coherence',
     'semantic_code_repair',
-    'analyze_semantic_bundle'
+    'generate_structured_session_analysis',
+    'generate_human_readable_narrative',
 ]

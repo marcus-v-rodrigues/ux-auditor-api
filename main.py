@@ -8,7 +8,6 @@ import json
 import traceback
 import aio_pika
 import requests
-import json
 
 # Importação da Configuração
 from config import settings
@@ -18,7 +17,7 @@ from models import AnalyzeRequest, InsightEvent, RRWebEvent, SessionProcessRespo
 from models.models import User, SessionAnalysis
 # Importação dos Serviços de Lógica (ML e Heurísticas)
 from services import detect_behavioral_anomalies, detect_rage_clicks
-# Importação do Motor Semântico (LLM/NLP)
+# Importação do Motor Semântico (interpretação estruturada via LLM)
 import semantic
 # Importação do Processador de Dados Otimizado (Novo Módulo)
 from services import SessionPreprocessor, build_semantic_session_bundle
@@ -109,6 +108,40 @@ class RabbitMQConnection:
 
 # Instância global de conexão RabbitMQ
 rabbitmq = RabbitMQConnection()
+
+
+def _unpack_semantic_llm_output(llm_output: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza a saída da camada LLM para os contratos antigo e novo."""
+    # A API pública ainda expõe campos legados; este adaptador evita espalhar essa lógica pelo código.
+    structured = llm_output.get("structured_analysis", {}) or {}
+    narrative = llm_output.get("human_readable_summary") or structured.get("session_narrative", "")
+    psychometrics = {
+        "overall_confidence": structured.get("overall_confidence", 0.0),
+        "goal_hypothesis": structured.get("goal_hypothesis", {}),
+        "friction_points": structured.get("friction_points", []),
+        "progress_signals": structured.get("progress_signals", []),
+    }
+    intent_analysis = {
+        "goal_hypothesis": structured.get("goal_hypothesis", {}),
+        "hypotheses": structured.get("hypotheses", []),
+        "overall_confidence": structured.get("overall_confidence", 0.0),
+    }
+    evidence_summary = structured.get("evidence_used", [])
+    hypotheses = structured.get("hypotheses", [])
+    data_quality = {
+        "ambiguities": structured.get("ambiguities", []),
+        "overall_confidence": structured.get("overall_confidence", 0.0),
+        "status": llm_output.get("status", "unknown"),
+    }
+    return {
+        "structured_analysis": structured,
+        "narrative": narrative,
+        "psychometrics": psychometrics,
+        "intent_analysis": intent_analysis,
+        "evidence_summary": evidence_summary,
+        "hypotheses": hypotheses,
+        "data_quality": data_quality,
+    }
 
 
 @app.on_event("startup")
@@ -374,28 +407,32 @@ async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
     """
     Endpoint de Análise de Alto Nível (Inteligência Semântica).
 
-    Orquestra múltiplas tarefas de NLP utilizando o contexto otimizado:
-    1. Geração de Narrativa (NLG): Cria um resumo textual legível da sessão.
-    2. Análise Psicométrica: Infere níveis de frustração e carga cognitiva.
-    3. Coerência de Jornada: Avalia se a navegação faz sentido lógico.
-    4. Self-Healing: Sugere correções de código para elementos problemáticos.
+    Interpreta o bundle semântico intermediário com um LLM controlado:
+    1. prepara o pacote de evidências
+    2. gera análise estruturada orientada a evidências
+    3. deriva uma narrativa humana curta da análise estruturada
+    4. preserva compatibilidade com os campos legados da API
 
     Args:
         request (AnalyzeRequest): Payload contendo a lista de eventos brutos.
 
     Returns:
-        Dict[str, Any]: Um dicionário contendo a narrativa, métricas psicométricas e análises de intenção.
+        Dict[str, Any]: Um dicionário contendo a narrativa, a análise estruturada e os campos legados de compatibilidade.
     """
     processed = SessionPreprocessor.process(request.events)
     semantic_bundle = build_semantic_session_bundle(request.events, processed)
-    llm_output = await semantic.analyze_semantic_bundle(semantic_bundle)
+    llm_output = await semantic.generate_structured_session_analysis(semantic_bundle)
+    unpacked = _unpack_semantic_llm_output(llm_output)
 
-    narrative = llm_output.get("narrative", "")
-    psychometrics = llm_output.get("psychometrics", {})
-    intent = llm_output.get("intent_analysis", {})
-    evidence_summary = llm_output.get("evidence_summary", [])
-    hypotheses = llm_output.get("hypotheses", [])
-    data_quality = llm_output.get("data_quality", {})
+    # A resposta do endpoint continua compatível com o contrato anterior,
+    # mas a verdade analítica agora vem de structured_analysis.
+    narrative = unpacked["narrative"]
+    psychometrics = unpacked["psychometrics"]
+    intent = unpacked["intent_analysis"]
+    evidence_summary = unpacked["evidence_summary"]
+    hypotheses = unpacked["hypotheses"]
+    data_quality = unpacked["data_quality"]
+    structured_analysis = unpacked["structured_analysis"]
 
     rage_clicks = [item for item in semantic_bundle.heuristic_events if item.type == "rage_click"]
     repairs = []
@@ -411,6 +448,7 @@ async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
         "evidence_summary": evidence_summary,
         "hypotheses": hypotheses,
         "data_quality": data_quality,
+        "structured_analysis": structured_analysis,
         "semantic_bundle": semantic_bundle.model_dump(mode="json"),
         "suggested_repairs": repairs,
         "llm_output": llm_output,
@@ -504,10 +542,9 @@ async def process_session(
     2. Pré-processa os eventos brutos do rrweb
     3. Executa análise de anomalias comportamentais (ML - Isolation Forest)
     4. Detecta rage clicks (Heurística)
-    5. Gera narrativa da sessão (LLM - NLG)
-    6. Analisa psicométricas (LLM)
-    7. Analisa coerência da jornada (LLM + Embeddings)
-    8. Persiste todos os resultados no banco de dados (SQLModel)
+    5. Monta o bundle semântico intermediário
+    6. Interpreta o bundle com o LLM estruturado
+    7. Persiste todos os resultados no banco de dados (SQLModel)
     
     Autenticação:
     - Requer cabeçalho: Authorization: Bearer <JWT_TOKEN>
@@ -521,9 +558,10 @@ async def process_session(
         
     Returns:
         Dict contendo todos os resultados da análise:
-        - narrative: Narrativa textual da sessão
-        - psychometrics: Métricas psicométricas (frustração, carga cognitiva)
-        - intent_analysis: Análise de coerência da jornada
+        - narrative: Resumo textual derivado de structured_analysis
+        - psychometrics: Estrutura legada derivada da análise estruturada
+        - intent_analysis: Estrutura legada derivada da análise estruturada
+        - structured_analysis: Contrato principal com evidências, hipóteses e confiança
         - insights: Lista de eventos de insight (anomalias, rage clicks)
         - session_uuid: UUID da sessão processada
         
@@ -598,12 +636,15 @@ async def process_session(
         semantic_bundle = build_semantic_session_bundle(rrweb_events, processed)
         print(f"✓ Bundle semântico intermediário gerado: {len(semantic_bundle.action_trace_compact)} ações compactadas")
 
-        llm_output = await semantic.analyze_semantic_bundle(semantic_bundle)
+        llm_output = await semantic.generate_structured_session_analysis(semantic_bundle)
         print("✓ LLM semântico executado sobre o bundle intermediário")
 
-        narrative = llm_output.get("narrative", "")
-        psychometrics = llm_output.get("psychometrics", {})
-        intent_analysis = llm_output.get("intent_analysis", {})
+        unpacked = _unpack_semantic_llm_output(llm_output)
+        # Mantém o payload final legível para a API, mesmo que o modelo tenha retornado campos mais ricos.
+        narrative = unpacked["narrative"]
+        psychometrics = unpacked["psychometrics"]
+        intent_analysis = unpacked["intent_analysis"]
+        structured_analysis = unpacked["structured_analysis"]
 
         # b) Detecção de anomalias comportamentais (ML - Isolation Forest)
         insights_ml = detect_behavioral_anomalies(processed.kinematics)
@@ -624,10 +665,16 @@ async def process_session(
             
             if existing_analysis:
                 # Atualiza a análise existente
-                existing_analysis.narrative = {"text": narrative, "semantic_bundle": semantic_bundle.model_dump(mode="json")}
+                # Persistimos narrativa, bundle e análise estruturada juntos para manter rastreabilidade.
+                existing_analysis.narrative = {
+                    "text": narrative,
+                    "structured_analysis": structured_analysis,
+                    "semantic_bundle": semantic_bundle.model_dump(mode="json"),
+                }
                 existing_analysis.psychometrics = psychometrics
                 existing_analysis.intent_analysis = {
                     "intent_analysis": intent_analysis,
+                    "structured_analysis": structured_analysis,
                     "llm_output": llm_output,
                 }
                 existing_analysis.insights = [insight.dict() for insight in all_insights]
@@ -636,13 +683,19 @@ async def process_session(
                 print(f"✓ Análise da sessão {session_uuid} atualizada no banco de dados")
             else:
                 # Cria uma nova análise
+                # Novo registro segue o mesmo contrato de persistência para não divergir do caminho de update.
                 new_analysis = SessionAnalysis(
                     session_uuid=session_uuid,
                     user_id=user_id,
-                    narrative={"text": narrative, "semantic_bundle": semantic_bundle.model_dump(mode="json")},
+                    narrative={
+                        "text": narrative,
+                        "structured_analysis": structured_analysis,
+                        "semantic_bundle": semantic_bundle.model_dump(mode="json"),
+                    },
                     psychometrics=psychometrics,
                     intent_analysis={
                         "intent_analysis": intent_analysis,
+                        "structured_analysis": structured_analysis,
                         "llm_output": llm_output,
                     },
                     insights=[insight.dict() for insight in all_insights]
@@ -660,12 +713,14 @@ async def process_session(
         payload = {
             "session_uuid": session_uuid,
             "user_id": user_id,
+            # O campo narrative segue como compatibilidade externa; structured_analysis é a origem de verdade.
             "narrative": narrative,
             "psychometrics": psychometrics,
             "intent_analysis": intent_analysis,
             "insights": [insight.dict() for insight in all_insights],
             "semantic_bundle": semantic_bundle.model_dump(mode="json"),
             "llm_output": llm_output,
+            "structured_analysis": structured_analysis,
             "stats": SessionProcessStats(
                 total_events=len(rrweb_events),
                 kinematic_vectors=len(processed.kinematics),
