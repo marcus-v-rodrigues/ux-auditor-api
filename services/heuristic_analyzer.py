@@ -1,8 +1,9 @@
 """
 Compatibilidade com o detector histórico de rage click.
 
-O novo pipeline centraliza heurísticas em `services.evidence_detector`, mas este
-arquivo é preservado para não quebrar imports existentes.
+Este arquivo é preservado para não quebrar imports em versões anteriores do sistema.
+A lógica real de detecção de heurísticas foi centralizada e aprimorada em 
+`services.evidence_detector` para suportar o novo pipeline semântico.
 """
 
 from services.evidence_detector import detect_rage_clicks

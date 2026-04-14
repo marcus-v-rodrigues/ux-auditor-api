@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, Any, Set
 from pydantic import BaseModel, Field
 from models.models import RRWebEvent
 
-# Configuração de Logs
+# Configuração de Logs para monitoramento do processamento de traços de eventos
 logger = logging.getLogger("ux_auditor")
 
 # --- Modelagem de Dados (Buckets) ---
@@ -11,39 +11,47 @@ logger = logging.getLogger("ux_auditor")
 class KinematicVector(BaseModel):
     """
     Bucket Otimizado para ML (Isolation Forest).
-    Focado exclusivamente em geometria e tempo para detecção de anomalias.
+    Focado exclusivamente em geometria e tempo para detecção de anomalias comportamentais.
     """
+    # Timestamp relativo permite que o modelo de ML ignore a data absoluta e foque no padrão do rastro
     timestamp: int = Field(..., description="Delta em ms relativo ao início da sessão")
+    # Coordenadas X e Y normalizadas capturadas da interação do cursor
     x: int
     y: int
 
 class UserAction(BaseModel):
     """
-    Bucket Otimizado para LLM (Geração de Narrativa).
-    Focado em intenção semântica e contexto de interface.
+    Bucket Otimizado para LLM (Geração de Narrativa e Análise Semântica).
+    Focado em intenção do usuário e contexto da interface.
     """
     timestamp: int
+    # Categorização de alto nível para facilitar a interpretação pelo modelo de linguagem
     action_type: str = Field(..., description="'click' | 'input' | 'navigation' | 'resize' | 'scroll'")
+    # ID do nó no DOM para permitir correlação rápida com o mapa de elementos
     target_id: Optional[int] = None
+    # Detalhes enriquecidos que descrevem o que o usuário interagiu (HTML, URL, valores)
     details: Optional[str] = Field(None, description="Contexto rico: HTML simplificado, URL, ou valor input")
 
 class ProcessedSession(BaseModel):
     """
-    Container final agnóstico.
+    Container final agnóstico que organiza a sessão em fluxos de dados distintos para diferentes motores de análise.
     """
     initial_timestamp: int
     total_duration: int
+    # Fluxo de dados geométricos para o motor de ML
     kinematics: List[KinematicVector] = Field(default_factory=list)
+    # Fluxo de eventos semânticos para o motor de LLM/Heurísticas
     actions: List[UserAction] = Field(default_factory=list)
+    # Dicionário de busca rápida O(1) para traduzir IDs numéricos do rrweb em HTML descritivo
     dom_map: Dict[int, str] = Field(default_factory=dict, description="Lookup O(1) de ID -> HTML Simplificado")
 
 # --- Lógica de Processamento (O(N) - Single Pass) ---
 
 class SessionPreprocessor:
-    # Tags que devem ser ignoradas para economizar tokens do LLM
+    # Tags que devem ser ignoradas para economizar tokens do LLM e remover ruído estrutural (scripts, CSS)
     IGNORED_TAGS: Set[str] = {'script', 'style', 'link', 'meta', 'noscript'}
     
-    # Atributos HTML relevantes para contexto (whitelist)
+    # Atributos HTML que carregam significado semântico real para a UX (IDs, nomes, labels)
     RELEVANT_ATTRS: Set[str] = {'id', 'class', 'name', 'type', 'aria-label', 'placeholder', 'value', 'href', 'role'}
 
     @staticmethod
@@ -65,35 +73,37 @@ class SessionPreprocessor:
         if not events:
             return ProcessedSession(initial_timestamp=0, total_duration=0)
 
-        # 1. Setup Temporal
-        # Ordenamos preventivamente por segurança, embora o rrweb garanta ordem na maioria das vezes
-        # events.sort(key=lambda x: x.timestamp) 
+        # 1. Setup Temporal: O primeiro evento marca o início (T0) da sessão
+        # events.sort(key=lambda x: x.timestamp) # Assumimos ordem cronológica vinda da persistência
         
         start_time = events[0].timestamp
         last_timestamp = start_time
         
+        # Estruturas temporárias para acumular os dados durante o loop único
         kinematics: List[KinematicVector] = []
         actions: List[UserAction] = []
         dom_map: Dict[int, str] = {}
 
-        # Mapeamento de Constantes RRWeb v2
-        TYPE_DOM_SNAPSHOT = 2
-        TYPE_INCREMENTAL = 3
-        TYPE_META = 4
+        # Mapeamento de Constantes internas do protocolo RRWeb v2
+        TYPE_DOM_SNAPSHOT = 2    # Captura completa do estado atual da página
+        TYPE_INCREMENTAL = 3     # Mudanças granulares (movimento, clique, scroll, mutação)
+        TYPE_META = 4            # Informações sobre a página (URL, tamanho da tela)
         
-        SOURCE_MOUSE_MOVE = 1
-        SOURCE_MOUSE_INTERACTION = 2
-        SOURCE_SCROLL = 3
-        SOURCE_RESIZE = 4
-        SOURCE_INPUT = 5
+        SOURCE_MOUSE_MOVE = 1    # Movimento do cursor (Cinemática)
+        SOURCE_MOUSE_INTERACTION = 2 # Cliques e interações discretas (Semântica)
+        SOURCE_SCROLL = 3        # Rolagem da página
+        SOURCE_RESIZE = 4        # Mudança no tamanho da janela
+        SOURCE_INPUT = 5         # Entrada de texto ou valores em campos
         
-        # Tipos de interação de mouse
+        # Tipos específicos de interação de mouse dentro do rrweb
         INTERACTION_CLICK = 2
 
         # --- LOOP ÚNICO (O(N)) ---
+        # Garantimos eficiência máxima percorrendo a lista de eventos apenas uma vez
         for idx, event in enumerate(events):
             try:
                 current_raw_ts = event.timestamp
+                # Normaliza o tempo para ms relativos ao início para facilitar cálculos posteriores
                 delta_ts = current_raw_ts - start_time
                 last_timestamp = current_raw_ts
 
@@ -101,9 +111,11 @@ class SessionPreprocessor:
                 data = event.data or {}
 
                 # --- Ramo A: Reconstrução de Contexto (DOM) ---
+                # snapshots ocorrem no início ou quando o estado do DOM muda drasticamente
                 if evt_type == TYPE_DOM_SNAPSHOT:
                     root_node = data.get('node')
                     if root_node:
+                        # Achata a estrutura de árvore recursiva em um mapa linear de ID -> HTML
                         SessionPreprocessor._flatten_dom_tree(root_node, dom_map)
 
                 # --- Ramo B: Meta Eventos (Navegação/Viewport) ---
@@ -112,25 +124,28 @@ class SessionPreprocessor:
                     width = data.get('width')
 
                     if href:
+                        # Registra transições de URL como ações de navegação
                         actions.append(UserAction(
                             timestamp=delta_ts,
                             action_type='navigation',
                             details=f"URL: {href}"
                         ))
                     elif width:
+                        # Registra mudanças na viewport do usuário
                         actions.append(UserAction(
                             timestamp=delta_ts,
                             action_type='resize',
                             details=f"Viewport: {width}x{data.get('height')}"
                         ))
 
-                # --- Ramo C: Eventos Incrementais ---
+                # --- Ramo C: Eventos Incrementais (Interações Ativas) ---
                 elif evt_type == TYPE_INCREMENTAL:
                     source = data.get('source')
 
-                    # C.1: Cinemática (ML) - Descompactando posições
+                    # C.1: Cinemática (ML) - Extração de coordenadas para o Isolation Forest
                     if source == SOURCE_MOUSE_MOVE:
                         positions = data.get('positions', [])
+                        # Validação para evitar quebras por dados malformados em um único evento
                         if not isinstance(positions, list):
                             logger.debug(
                                 "Skipping mouse move event %s because positions is %s",
@@ -139,31 +154,29 @@ class SessionPreprocessor:
                             )
                             continue
 
+                        # O rrweb compacta múltiplos movimentos em um único evento incremental
                         for pos in positions:
-                            if logger.isEnabledFor(logging.DEBUG):
-                                logger.debug("Formato de pos detectado: %s", type(pos).__name__)
-
                             x = None
                             y = None
                             p_offset = 0
 
-                            # Formato dict
+                            # O formato da posição pode variar entre dicionário ou lista
                             if isinstance(pos, dict):
                                 x = pos.get('x')
                                 y = pos.get('y')
                                 p_offset = pos.get('timeOffset', 0) or 0
 
-                            # Formato lista/tupla
                             elif isinstance(pos, (list, tuple)) and len(pos) >= 2:
                                 x = pos[0]
                                 y = pos[1]
+                                # Algumas versões guardam o tempo relativo no quarto índice
                                 p_offset = pos[3] if len(pos) >= 4 else 0
 
-                            # Ignora formatos inválidos
+                            # Ignora se os dados obrigatórios de geometria estiverem ausentes
                             if x is None or y is None:
                                 continue
 
-                            # Validar coordenadas
+                            # Filtra coordenadas negativas ou inválidas
                             if isinstance(x, (int, float)) and isinstance(y, (int, float)):
                                 if x >= 0 and y >= 0:
                                     kinematics.append(KinematicVector(
@@ -172,12 +185,13 @@ class SessionPreprocessor:
                                         y=int(y)
                                     ))
 
-                    # C.2: Ações do Usuário (LLM) - Cliques
+                    # C.2: Ações do Usuário (LLM) - Cliques e Toques
                     elif source == SOURCE_MOUSE_INTERACTION:
                         i_type = data.get('type')
+                        # Focamos especificamente no evento de clique para a análise semântica
                         if i_type == INTERACTION_CLICK:
                             target_id = data.get('id')
-                            # Lookup O(1) no mapa gerado
+                            # Busca no mapa DOM o que é esse ID em termos de HTML simplificado
                             node_html = dom_map.get(target_id, "unknown_element")
 
                             actions.append(UserAction(
@@ -187,11 +201,12 @@ class SessionPreprocessor:
                                 details=f"Element: {node_html} | Coords: ({data.get('x')}, {data.get('y')})"
                             ))
 
-                    # C.3: Ações do Usuário (LLM) - Scroll
+                    # C.3: Ações do Usuário (LLM) - Scroll (Rolagem)
                     elif source == SOURCE_SCROLL:
                         delta_y = data.get('deltaY', data.get('y'))
                         scroll_y = data.get('scrollY')
                         if delta_y is not None or scroll_y is not None:
+                            # Inferência de direção para facilitar a narrativa do LLM no prompt
                             direction = "down" if (delta_y or scroll_y or 0) > 0 else "up" if (delta_y or scroll_y or 0) < 0 else "neutral"
                             actions.append(UserAction(
                                 timestamp=delta_ts,
@@ -199,7 +214,7 @@ class SessionPreprocessor:
                                 details=f"Scroll: direction={direction} deltaY={delta_y} scrollY={scroll_y}"
                             ))
 
-                    # C.4: Redimensionamento/Viewport
+                    # C.4: Redimensionamento de janela (Resize)
                     elif source == SOURCE_RESIZE:
                         width = data.get('width')
                         if width:
@@ -209,21 +224,22 @@ class SessionPreprocessor:
                                 details=f"Viewport: {width}x{data.get('height')}"
                             ))
 
-                    # C.5: Ações do Usuário (LLM) - Inputs
+                    # C.5: Ações do Usuário (LLM) - Digitação (Inputs)
                     elif source == SOURCE_INPUT:
                         target_id = data.get('id')
                         text_val = data.get('text', '')
                         is_checked = data.get('isChecked')
 
                         details = ""
+                        # Trata inputs booleanos (checkbox/radio) separadamente de campos de texto
                         if is_checked is not None:
                             details = f"Checked: {is_checked}"
                         else:
-                            # Privacidade e Economia: Truncar inputs longos
+                            # LGPD e Economia de Tokens: Truncamos textos longos em inputs
                             safe_text = text_val[:40] + "..." if len(text_val) > 40 else text_val
                             details = f"Typed: '{safe_text}'"
 
-                        # Node enrichment se possível
+                        # Enriquecimento opcional: Adiciona o contexto do elemento HTML alvo
                         node_context = dom_map.get(target_id, "")
                         if node_context:
                             details += f" on {node_context}"
@@ -235,6 +251,7 @@ class SessionPreprocessor:
                             details=details
                         ))
             except Exception as exc:
+                # Loga o erro mas continua o processamento para não perder a sessão inteira por um evento malformado
                 logger.warning(
                     "Skipping malformed rrweb event at index %s (type=%s): %s: %s",
                     idx,
@@ -244,7 +261,7 @@ class SessionPreprocessor:
                 )
                 continue
 
-        # 3. Consolidação Final
+        # 3. Consolidação Final: Cálculo da duração total e retorno do container agnóstico
         total_duration = last_timestamp - start_time
         
         logger.info(f"Processed session: {len(events)} raw events -> {len(kinematics)} vectors, {len(actions)} actions.")
@@ -261,48 +278,48 @@ class SessionPreprocessor:
     def _flatten_dom_tree(node: Dict[str, Any], dom_map: Dict[int, str]):
         """
         Percorre recursivamente a árvore JSON do rrweb.
-        Objetivo: Criar uma representação HTML 'token-efficient' para o LLM.
-        Ignora nós irrelevantes (estilos, scripts, metadados ocultos).
+        Objetivo: Criar uma representação HTML 'token-efficient' (compacta) para o LLM.
+        Ignora nós irrelevantes como CSS e scripts para focar na semântica da interface.
         """
         node_id = node.get('id')
         tag_name = node.get('tagName', '').lower()
         
-        # Regra de exclusão: Ignorar CSS massivo e scripts
+        # Filtro de exclusão: Nós que não contribuem para a análise visual/funcional do LLM
         if tag_name in SessionPreprocessor.IGNORED_TAGS:
             return
 
-        # Se for um nó de texto (type 3), não tem ID próprio relevante para clique, 
-        # mas o conteúdo é útil para o pai. Aqui focamos em nós estruturais (type 2).
+        # Processamos apenas nós do tipo Elemento (que possuem ID e Tag)
         if node_id and tag_name:
             attributes = node.get('attributes', {})
             
-            # Construção seletiva de atributos
+            # Seleção de atributos "Whitelist" que carregam semântica UX
             attrs_str = ""
             for k, v in attributes.items():
                 if k in SessionPreprocessor.RELEVANT_ATTRS:
-                    # Truncar valores de atributos muito longos (ex: URLs base64 ou paths complexos)
+                    # Proteção contra valores de atributos gigantescos (ex: SVGs embutidos)
                     v_str = str(v)
                     if len(v_str) > 50: 
                         v_str = v_str[:47] + "..."
                     attrs_str += f' {k}="{v_str}"'
             
-            # Tentar extrair conteúdo de texto imediato (child text nodes)
+            # Extração de texto visível para ajudar o LLM a entender o rótulo do componente
             text_content = ""
             children = node.get('childNodes', [])
             for child in children:
-                if child.get('type') == 3: # Text Node
+                if child.get('type') == 3: # Tipo 3 é Text Node (texto puro)
                     raw_text = child.get('textContent', '').strip()
                     if raw_text:
                         text_content += raw_text + " "
             
+            # Truncamento de texto excessivo por economia de tokens
             if len(text_content) > 30:
                 text_content = text_content[:30] + "..."
 
-            # Formato Compacto: <button id="12" class="btn">Enviar</button>
+            # Montagem do HTML sintético: <button class="btn">Login</button>
             simplified_html = f"<{tag_name}{attrs_str}>{text_content.strip()}</{tag_name}>"
             dom_map[node_id] = simplified_html
 
-        # Recursão
+        # Chamada recursiva para processar os filhos da árvore (Depth-First Search)
         if 'childNodes' in node:
             for child in node['childNodes']:
                 SessionPreprocessor._flatten_dom_tree(child, dom_map)

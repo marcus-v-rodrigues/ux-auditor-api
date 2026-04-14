@@ -2,7 +2,8 @@
 Compactação determinística da sequência de ações.
 
 O objetivo é reduzir ruído estrutural sem perder contexto suficiente para a
-interpretação posterior via LLM.
+interpretação posterior via LLM. Transforma sequências de eventos técnicos
+repetitivos em blocos semânticos únicos (Ex: 10 inputs seguidos -> 1 Form Filling).
 """
 
 from __future__ import annotations
@@ -18,26 +19,33 @@ from services.semantic_preprocessor import SemanticActionRecord
 
 
 class TraceCompressionResult(BaseModel):
+    """Container para o traço compactado e estatísticas de padrões detectados."""
     action_trace_compact: List[CompactAction] = Field(default_factory=list)
     dominant_patterns: List[Dict[str, Any]] = Field(default_factory=list)
     candidate_meaningful_moments: List[HeuristicEvidence] = Field(default_factory=list)
 
 
 def _window_kinematic_bursts(kinematics: List[Dict[str, int]]) -> List[CompactAction]:
+    """
+    Identifica 'explosões' de movimento do mouse (visual search).
+    
+    Um burst é uma janela temporal com alta densidade de mousemove e nenhuma ação conclusiva.
+    Isso ajuda o LLM a entender que o usuário estava procurando algo visualmente na tela.
+    """
     if len(kinematics) < settings.VISUAL_SEARCH_MOUSE_MOVES_MIN:
         return []
 
     bursts: List[CompactAction] = []
     start_idx = 0
     while start_idx < len(kinematics):
-        # Um "burst" é uma janela de muitos mousemoves com pouca ação conclusiva.
-        # Ele serve como evidência estrutural para o LLM, não como interpretação.
+        # Janela deslizante para agrupar movimentos contíguos
         start_point = kinematics[start_idx]
         end_idx = start_idx + 1
         while end_idx < len(kinematics) and kinematics[end_idx]["timestamp"] - start_point["timestamp"] <= settings.BURST_WINDOW_MS:
             end_idx += 1
 
         window = kinematics[start_idx:end_idx]
+        # Se o número de movimentos na janela atingir o limite, vira um burst
         if len(window) >= settings.VISUAL_SEARCH_MOUSE_MOVES_MIN:
             bursts.append(
                 CompactAction(
@@ -54,7 +62,7 @@ def _window_kinematic_bursts(kinematics: List[Dict[str, int]]) -> List[CompactAc
                     },
                 )
             )
-            start_idx = end_idx
+            start_idx = end_idx # Avança para o fim do burst processado
         else:
             start_idx += 1
 
@@ -62,27 +70,47 @@ def _window_kinematic_bursts(kinematics: List[Dict[str, int]]) -> List[CompactAc
 
 
 def _mergeable(previous: CompactAction, current: SemanticActionRecord) -> bool:
+    """
+    Determina se uma nova ação pode ser fundida com a anterior para compactação.
+    
+    Regras de Negócio:
+    1. Mesma categoria (kind).
+    2. Navegação nunca se funde (cada página é única).
+    3. Cliques e Resizes só se fundem se forem no MESMO elemento/alvo.
+    4. Inputs/Toggles se fundem se forem no mesmo campo (incremental typing) 
+       OU se forem campos diferentes no mesmo grupo dentro de um intervalo curto (Form Filling).
+    5. Scrolls se fundem se forem na mesma direção e página.
+    """
     if previous.kind != current.kind:
         return False
     if previous.kind == "navigation":
         return False
+    
+    # Cliques repetidos no mesmo botão (double click ou spam)
     if previous.kind in {"click", "resize"}:
-        # Cliques/resize só se fundem se realmente apontarem para o mesmo alvo.
         return previous.target == current.target
+        
+    # Agrupamento de formulários (Sequential Filling)
     if previous.kind in {"input", "radio", "checkbox", "select", "toggle"}:
-        # Em formulários, aceitar fusão apenas se o valor/estado for igual.
+        # Typing no mesmo campo
         if previous.target == current.target:
             previous_signature = f"value:{previous.value}" if previous.value is not None else f"checked:{previous.checked}" if previous.checked is not None else None
             current_signature = f"value:{current.value}" if current.value is not None else f"checked:{current.checked}" if current.checked is not None else None
             return previous_signature == current_signature
+        # Transição rápida entre campos do mesmo formulário (mesmo target_group)
         if previous.target_group and previous.target_group == current.target_group:
             return current.t - (previous.end or previous.t) <= settings.SEQUENTIAL_FILLING_MAX_GAP_MS
+            
+    # Scroll contínuo
     if previous.kind == "scroll":
         return previous.page == current.page and previous.metadata.get("direction") == current.direction
+        
+    # Fallback: mesma área e tempo curto
     return previous.target == current.target and current.t - (previous.end or previous.t) <= settings.REPEATED_ACTION_WINDOW_MS
 
 
 def _compact_from_record(record: SemanticActionRecord) -> CompactAction:
+    """Converte um registro bruto em um objeto de ação compactável."""
     return CompactAction(
         t=record.t,
         kind=record.kind,
@@ -104,11 +132,18 @@ def compress_action_trace(
     actions: List[SemanticActionRecord],
     kinematics: Optional[List[Dict[str, int]]] = None,
 ) -> TraceCompressionResult:
+    """
+    Executa a compactação do traço de ações em um único loop O(N).
+    
+    O algoritmo mantém um ponteiro para a 'ação atual' e tenta fundir novas ações nela.
+    Quando a fusão não é possível, a ação atual é fechada e adicionada ao traço final.
+    """
     if not actions:
         return TraceCompressionResult(
             action_trace_compact=_window_kinematic_bursts(kinematics or []),
         )
 
+    # Garante ordem temporal para o algoritmo de janela
     ordered = sorted(actions, key=lambda item: item.t)
     compact: List[CompactAction] = []
     pattern_counter: Counter = Counter()
@@ -121,10 +156,12 @@ def compress_action_trace(
             current = _compact_from_record(record)
             continue
 
-        # Agrupa repetições sem perder o primeiro e o último ponto do bloco.
+        # Tenta fundir com a ação anterior (Debounce Semântico)
         if _mergeable(current, record):
             current.count += 1
             current.end = record.t
+            
+            # Atribuição de padrões semânticos baseada na fusão
             if current.kind in {"input", "radio", "checkbox", "select", "toggle"} and current.target_group == record.target_group:
                 current.pattern = "sequential_form_filling"
                 current.semantic_label = current.semantic_label or record.semantic_label
@@ -140,7 +177,10 @@ def compress_action_trace(
                 pattern_counter["selection_oscillation"] += 1
             continue
 
+        # Se não fundiu, salva a ação atual e começa uma nova
         compact.append(current)
+        
+        # Registra 'Momentos Interessantes' (ações com repetição ou padrões específicos)
         if current.count > 1 or current.pattern:
             candidate_moments.append(
                 HeuristicEvidence(
@@ -160,6 +200,7 @@ def compress_action_trace(
             )
         current = _compact_from_record(record)
 
+    # Fecha a última ação pendente
     if current is not None:
         compact.append(current)
         if current.count > 1 or current.pattern:
@@ -180,10 +221,13 @@ def compress_action_trace(
                 )
             )
 
+    # Mescla os 'bursts' de movimento (cinemática) com o traço de ações (semântica)
     kinematic_bursts = _window_kinematic_bursts(kinematics or [])
     compact.extend(kinematic_bursts)
+    # Ordenação final para manter coerência temporal após o merge
     compact.sort(key=lambda item: item.t)
 
+    # Consolida padrões dominantes para o resumo executivo
     dominant_patterns = [
         {"type": pattern, "count": count}
         for pattern, count in pattern_counter.most_common()
@@ -196,3 +240,4 @@ def compress_action_trace(
         dominant_patterns=dominant_patterns,
         candidate_meaningful_moments=candidate_moments,
     )
+

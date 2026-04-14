@@ -1,8 +1,8 @@
 """
 Orquestração do pipeline semântico híbrido.
 
-Transforma eventos rrweb brutos em um JSON intermediário compacto e auditável,
-pronto para ser enviado ao LLM.
+Transforma eventos rrweb brutos em um JSON intermediário compacto e auditável (SemanticSessionBundle),
+pronto para ser consumido pelo motor de análise generativa (LLM).
 """
 
 from __future__ import annotations
@@ -21,27 +21,42 @@ from services.trace_compressor import TraceCompressionResult, compress_action_tr
 class SemanticSessionSummarizer:
     """
     Pipeline determinístico que produz o bundle intermediário para o LLM.
+    Atua como o orquestrador central que coordena as diversas etapas de transformação e análise.
     """
 
     @staticmethod
     def summarize(events: List[Any], processed: Optional[ProcessedSession] = None) -> SemanticSessionBundle:
-        # Primeiro reaproveitamos o preprocessor legado para manter compatibilidade
-        # e evitar reconstrução duplicada do DOM/kinematics.
+        """
+        Executa o fluxo completo de processamento: Bruto -> Semântico -> Comprimido -> Segmentado -> Heurístico.
+        """
+        # Passo 1: Pré-processamento técnico de baixo nível (O(N))
+        # Extrai o mapa do DOM e os vetores de movimento (kinematics) de forma eficiente.
         processed_session = processed or SessionPreprocessor.process(events)
+        
+        # Passo 2: Extração Semântica
+        # Traduz os eventos técnicos do protocolo rrweb em registros de intenção humana (cliques, inputs, etc).
         extraction = SemanticPreprocessor.extract(events, processed_session)
 
-        # Depois comprimimos, segmentamos e detectamos evidências sobre a mesma base.
+        # Passo 3: Compressão de Rastro (Otimização de Contexto)
+        # Elimina redundâncias e ações repetitivas para reduzir o consumo de tokens e focar no rastro essencial.
         compression: TraceCompressionResult = compress_action_trace(
             extraction.semantic_actions,
             extraction.kinematics,
         )
+        
+        # Passo 4: Segmentação por Blocos de Atividade
+        # Agrupa as ações em 'tarefas' baseadas em proximidade temporal e mudanças de contexto de interface.
         segmentation: TaskSegmentationResult = segment_task_blocks(extraction.semantic_actions)
+        
+        # Passo 5: Detecção de Evidências Comportamentais (Heurísticas)
+        # Identifica padrões anômalos ou sinais de fricção UX (rage clicks, hesitações, loops) sobre os dados processados.
         behavioral: BehavioralEvidenceResult = detect_behavioral_evidence(
             extraction.semantic_actions,
             extraction.kinematics,
             segmentation.task_segments,
         )
 
+        # Atualização dinâmica do sumário com dados provenientes da detecção de heurísticas temporais.
         session_summary = extraction.session_summary.model_copy(
             update={"idle_periods_gt_3s": sum(1 for item in behavioral.heuristic_events if item.type == "long_hesitation")}
         )
@@ -51,9 +66,11 @@ class SemanticSessionSummarizer:
         observed_facts["total_actions"] = len(extraction.semantic_actions)
         observed_facts["total_segments"] = len(segmentation.task_segments)
 
+        # Cálculo de Sinais Derivados: Métricas de alto nível que ajudam o LLM a entender a 'temperatura' da sessão.
         derived_signals: Dict[str, Any] = {
-            # Os valores abaixo ajudam o LLM a entender densidade, revisitas e compressão.
+            # Distribuição de tipos de ação (ajuda a identificar sessões puramente exploratórias vs preenchimento)
             "action_kind_distribution": dict(Counter(action.kind for action in extraction.semantic_actions)),
+            # Razão de revisitas: métrica de redundância e possível confusão do usuário na interface.
             "target_revisit_ratio": round(
                 float(sum(max(count - 1, 0) for count in extraction.target_visit_counts.values())) / max(len(extraction.semantic_actions), 1),
                 4,
@@ -62,8 +79,10 @@ class SemanticSessionSummarizer:
                 float(sum(max(count - 1, 0) for count in extraction.group_visit_counts.values())) / max(len(extraction.semantic_actions), 1),
                 4,
             ),
+            # Panorama das heurísticas detectadas para dar contexto estatístico imediato.
             "heuristic_distribution": behavioral.behavioral_signals.get("heuristic_counts", {}),
             "segment_count": len(segmentation.task_segments),
+            # Eficiência da compressão: indica quão ruidosa era a sessão original.
             "compression_ratio_estimate": round(
                 float(len(extraction.semantic_actions)) / max(len(compression.action_trace_compact), 1),
                 4,
@@ -80,10 +99,11 @@ class SemanticSessionSummarizer:
             }
         )
 
-        # O bundle final mantém evidência, compactação e fatos separados.
+        # Consolidação de 'Momentos Significativos' extraídos tanto pelo compressor quanto pelo detector de heurísticas.
         candidate_meaningful_moments = list(compression.candidate_meaningful_moments)
         candidate_meaningful_moments.extend(behavioral.candidate_meaningful_moments)
 
+        # Identificação de padrões dominantes que resumem o comportamento da sessão de forma sucinta.
         dominant_patterns = list(compression.dominant_patterns)
         dominant_patterns.extend(
             [
@@ -93,6 +113,7 @@ class SemanticSessionSummarizer:
             ]
         )
 
+        # Retorno do bundle completo: o contrato final entre o processamento determinístico e o motor generativo.
         return SemanticSessionBundle(
             session_summary=session_summary,
             task_segments=segmentation.task_segments,
@@ -107,4 +128,5 @@ class SemanticSessionSummarizer:
 
 
 def build_semantic_session_bundle(events: List[Any], processed: Optional[ProcessedSession] = None) -> SemanticSessionBundle:
+    """Função auxiliar (Helper) para disparar o pipeline de sumarização semântica."""
     return SemanticSessionSummarizer.summarize(events, processed)
