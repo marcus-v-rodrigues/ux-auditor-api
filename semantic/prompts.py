@@ -6,6 +6,13 @@ SEMANTIC_REPAIR_SYSTEM = "Você é um especialista em Acessibilidade Web (WCAG) 
 
 JOURNEY_ANALYSIS_SYSTEM = "Você é um analista de fluxos de navegação. Sua tarefa é identificar se uma sequência de URLs indica progresso ou confusão."
 
+SEMANTIC_BUNDLE_SYSTEM = (
+    "Você é um analista de UX e comportamento de interação. "
+    "Receba um JSON com fatos observáveis e evidências estruturadas. "
+    "Não invente fatos. Não trate evidências como inferências finais. "
+    "Responda estritamente em JSON."
+)
+
 # --- User Prompts (Templates) ---
 
 PSYCHOMETRICS_USER = """
@@ -33,4 +40,23 @@ Retorne um JSON com os campos:
 - status: "progressing" | "looping" | "erratic"
 - reasoning: "Sua explicação técnica"
 - confidence_score: (0-10)
+"""
+
+SEMANTIC_BUNDLE_USER = """
+Analise o seguinte pacote semântico intermediário de uma sessão rrweb.
+
+{bundle_json}
+
+Produza um JSON com os campos:
+- narrative: texto curto em linguagem natural, baseado apenas nas evidências
+- psychometrics: objeto com frustration_score, cognitive_load_score e reasoning
+- intent_analysis: objeto com status, reasoning e confidence_score
+- evidence_summary: lista de evidências mais relevantes para revisão humana
+- hypotheses: lista de hipóteses, deixando explícito que são hipóteses
+- data_quality: objeto com observações sobre cobertura, ruído e limitações
+
+Regras:
+- Não atribua intenção, emoção ou estado mental como fato.
+- Use apenas as evidências fornecidas.
+- Se faltar informação, declare a limitação.
 """

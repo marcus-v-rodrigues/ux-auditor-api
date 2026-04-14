@@ -2,8 +2,9 @@ import os
 import json
 import aiohttp
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 from services.data_processor import UserAction
+from models.models import SemanticSessionBundle
 from . import prompts
 
 # --- Configurações de Ambiente ---
@@ -28,6 +29,13 @@ async def _post_ai_service(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
                 text = await response.text()
                 raise Exception(f"AI Service Error ({response.status}): {text}")
             return await response.json()
+
+
+def _extract_json_content(content: str) -> str:
+    # Normalização do json, pois muitos provedores devolvem JSON embrulhado em fences
+    if "```json" in content:
+        content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+    return content.strip()
 
 def generate_session_narrative(actions: List[UserAction]) -> str:
     """
@@ -86,8 +94,7 @@ async def analyze_psychometrics(narrative: str) -> Dict[str, Any]:
     try:
         res = await _post_ai_service(LLM_URL, body)
         content = res['choices'][0]['message']['content']
-        if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
-        return json.loads(content)
+        return json.loads(_extract_json_content(content))
     except Exception as e:
         return {"error": str(e), "frustration_score": -1, "reasoning": "LLM inference failed."}
 
@@ -125,7 +132,7 @@ async def analyze_journey_coherence(urls_visited: List[str]) -> Dict[str, Any]:
     try:
         llm_res = await _post_ai_service(LLM_URL, body)
         content = llm_res['choices'][0]['message']['content']
-        if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
+        content = _extract_json_content(content)
         
         analysis = json.loads(content)
         analysis["quantitative_metrics"] = {
@@ -151,7 +158,34 @@ async def semantic_code_repair(html_snippet: str, interaction_type: str) -> Dict
     try:
         res = await _post_ai_service(LLM_URL, body)
         content = res['choices'][0]['message']['content']
-        if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
+        content = _extract_json_content(content)
         return json.loads(content)
     except Exception as e:
         return {"original_html": html_snippet, "explanation": str(e)}
+
+
+async def analyze_semantic_bundle(bundle: Union[SemanticSessionBundle, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Envia o JSON intermediário compacto para o LLM e recebe narrativa e hipóteses.
+    """
+    if hasattr(bundle, "model_dump"):
+        bundle_json = json.dumps(bundle.model_dump(mode="json"), ensure_ascii=False)
+    else:
+        bundle_json = json.dumps(bundle, ensure_ascii=False)
+
+    body = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": prompts.SEMANTIC_BUNDLE_SYSTEM},
+            {"role": "user", "content": prompts.SEMANTIC_BUNDLE_USER.format(bundle_json=bundle_json)},
+        ],
+        # Temperatura baixa para reorganização fiel, não invenção.
+        "temperature": 0.2,
+    }
+
+    try:
+        res = await _post_ai_service(LLM_URL, body)
+        content = res["choices"][0]["message"]["content"]
+        return json.loads(_extract_json_content(content))
+    except Exception as e:
+        return {"error": str(e), "status": "error", "reasoning": "LLM inference failed."}

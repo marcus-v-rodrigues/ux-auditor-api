@@ -50,6 +50,29 @@ class Settings(BaseSettings):
     # Configuração da Aplicação
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
+
+    # Configuração do pipeline semântico híbrido
+    LONG_IDLE_MS: int = 3000
+    MICRO_IDLE_MIN_MS: int = 500
+    MICRO_IDLE_MAX_MS: int = 3000
+    HOVER_PROLONGED_MS: int = 1500
+    RAGE_CLICK_MIN_COUNT: int = 3
+    RAGE_CLICK_WINDOW_MS: int = 1000
+    RAGE_CLICK_DISTANCE_PX: int = 30
+    DEAD_CLICK_WINDOW_MS: int = 1200
+    RAPID_ALTERNATION_WINDOW_MS: int = 4000
+    SCROLL_BOUNCE_WINDOW_MS: int = 2500
+    SEQUENTIAL_FILLING_MAX_GAP_MS: int = 2500
+    SEGMENT_GAP_MS: int = 3000
+    BURST_WINDOW_MS: int = 5000
+    BURST_MIN_ACTIONS: int = 5
+    VISUAL_SEARCH_MOUSE_MOVES_MIN: int = 20
+    FORM_FRICTION_SCORE_THRESHOLD: float = 0.65
+    ERRATIC_MOTION_DIRECTION_CHANGES_MIN: int = 6
+    ERRATIC_MOTION_PATH_EFFICIENCY_MAX: float = 0.45
+    REPEATED_ACTION_WINDOW_MS: int = 2000
+    INPUT_REVISION_MIN_CHANGES: int = 2
+    SELECTIVE_REVISIT_MIN_COUNT: int = 2
     
     # Configuração PostgreSQL (SQLModel/SQLAlchemy)
     # URL de conexão com o banco de dados

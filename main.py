@@ -5,8 +5,10 @@ from typing import List, Dict, Any
 from datetime import datetime
 import uuid
 import json
+import traceback
 import aio_pika
 import requests
+import json
 
 # Importação da Configuração
 from config import settings
@@ -19,7 +21,7 @@ from services import detect_behavioral_anomalies, detect_rage_clicks
 # Importação do Motor Semântico (LLM/NLP)
 import semantic
 # Importação do Processador de Dados Otimizado (Novo Módulo)
-from services import SessionPreprocessor
+from services import SessionPreprocessor, build_semantic_session_bundle
 # Importação do Módulo de Autenticação
 from services import get_current_user, TokenData
 # Importação do Serviço de Storage (Garage)
@@ -384,41 +386,20 @@ async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Um dicionário contendo a narrativa, métricas psicométricas e análises de intenção.
     """
-    # 1. Pré-processamento O(N)
-    # Garante que temos as estruturas 'actions' limpas para o LLM.
     processed = SessionPreprocessor.process(request.events)
+    semantic_bundle = build_semantic_session_bundle(request.events, processed)
+    llm_output = await semantic.analyze_semantic_bundle(semantic_bundle)
 
-    # 2. Fase 1: Transformação de logs técnicos em contexto qualitativo (NLG)
-    # Alimentamos o motor semântico com 'UserAction' (intencionalidade) ao invés de logs técnicos.
-    # Isso reduz drasticamente o consumo de tokens e melhora a qualidade da narrativa.
-    narrative = semantic.generate_session_narrative(processed.actions)
+    narrative = llm_output.get("narrative", "")
+    psychometrics = llm_output.get("psychometrics", {})
+    intent = llm_output.get("intent_analysis", {})
+    evidence_summary = llm_output.get("evidence_summary", [])
+    hypotheses = llm_output.get("hypotheses", [])
+    data_quality = llm_output.get("data_quality", {})
 
-    # 3. Fase 2: Inferência de estados psicológicos via LLM
-    # Analisa a narrativa gerada para extrair sentimentos do usuário.
-    psychometrics = await semantic.analyze_psychometrics(narrative)
-
-    # 4. Fase 3: Avaliação semântica da progressão do usuário
-    # Extraímos URLs limpas diretamente das ações de navegação processadas.
-    urls = [
-        action.details.replace('URL: ', '')
-        for action in processed.actions
-        if action.action_type == 'navigation' and action.details
-    ]
-    intent = await semantic.analyze_journey_coherence(urls)
-
-    # 5. Fase 4: Identificação e reparo de elementos problemáticos (Self-Healing)
-    # Detectamos rage clicks para identificar pontos de dor.
-    rage_clicks = detect_rage_clicks(request.events)
+    rage_clicks = [item for item in semantic_bundle.heuristic_events if item.type == "rage_click"]
     repairs = []
-
-    # Se houver frustração detectada, tentamos sugerir um reparo de código
     if rage_clicks:
-        # Exemplo de lógica de Self-Healing:
-        # Pegamos o ID do elemento alvo do rage click e buscamos seu HTML no dom_map
-        target_event = rage_clicks[0] # Simplificação: pega o primeiro
-        # Nota: Em um caso real, usaríamos o target_id do evento para buscar no processed.dom_map
-        
-        # HTML de exemplo para demonstração da funcionalidade
         example_html = "<div class='btn-save'>Save Settings</div>"
         repair = await semantic.semantic_code_repair(example_html, "click")
         repairs.append(repair)
@@ -427,7 +408,12 @@ async def analyze_semantic(request: AnalyzeRequest) -> Dict[str, Any]:
         "narrative": narrative,
         "psychometrics": psychometrics,
         "intent_analysis": intent,
-        "suggested_repairs": repairs
+        "evidence_summary": evidence_summary,
+        "hypotheses": hypotheses,
+        "data_quality": data_quality,
+        "semantic_bundle": semantic_bundle.model_dump(mode="json"),
+        "suggested_repairs": repairs,
+        "llm_output": llm_output,
     }
 
 
@@ -604,10 +590,21 @@ async def process_session(
     
     # 4. Executa o pipeline de análise
     try:
-        # a) Pré-processamento dos eventos
+        print(f"Processando {len(rrweb_events)} eventos RRWeb")
         processed = SessionPreprocessor.process(rrweb_events)
+        print(f"✓ {len(processed.kinematics)} vetores cinemáticos extraídos")
         print(f"✓ Pré-processamento concluído: {len(processed.kinematics)} vetores, {len(processed.actions)} ações")
-        
+
+        semantic_bundle = build_semantic_session_bundle(rrweb_events, processed)
+        print(f"✓ Bundle semântico intermediário gerado: {len(semantic_bundle.action_trace_compact)} ações compactadas")
+
+        llm_output = await semantic.analyze_semantic_bundle(semantic_bundle)
+        print("✓ LLM semântico executado sobre o bundle intermediário")
+
+        narrative = llm_output.get("narrative", "")
+        psychometrics = llm_output.get("psychometrics", {})
+        intent_analysis = llm_output.get("intent_analysis", {})
+
         # b) Detecção de anomalias comportamentais (ML - Isolation Forest)
         insights_ml = detect_behavioral_anomalies(processed.kinematics)
         print(f"✓ {len(insights_ml)} anomalias comportamentais detectadas")
@@ -615,24 +612,6 @@ async def process_session(
         # c) Detecção de rage clicks (Heurística)
         insights_rage = detect_rage_clicks(rrweb_events)
         print(f"✓ {len(insights_rage)} rage clicks detectados")
-        
-        # d) Geração de narrativa da sessão (LLM - NLG)
-        narrative = semantic.generate_session_narrative(processed.actions)
-        print(f"✓ Narrativa gerada: {len(narrative)} caracteres")
-        
-        # e) Análise psicométrica (LLM)
-        psychometrics = await semantic.analyze_psychometrics(narrative)
-        print(f"✓ Análise psicométrica concluída")
-        
-        # f) Análise de coerência da jornada (LLM + Embeddings)
-        # Extrai URLs das ações de navegação
-        urls = [
-            action.details.replace("URL: ", "")
-            for action in processed.actions
-            if action.action_type == "navigation" and action.details
-        ]
-        intent_analysis = await semantic.analyze_journey_coherence(urls)
-        print(f"✓ Análise de coerência de jornada concluída")
         
         # Consolida todos os insights
         all_insights = insights_ml + insights_rage
@@ -645,9 +624,12 @@ async def process_session(
             
             if existing_analysis:
                 # Atualiza a análise existente
-                existing_analysis.narrative = {"text": narrative}
+                existing_analysis.narrative = {"text": narrative, "semantic_bundle": semantic_bundle.model_dump(mode="json")}
                 existing_analysis.psychometrics = psychometrics
-                existing_analysis.intent_analysis = intent_analysis
+                existing_analysis.intent_analysis = {
+                    "intent_analysis": intent_analysis,
+                    "llm_output": llm_output,
+                }
                 existing_analysis.insights = [insight.dict() for insight in all_insights]
                 session.add(existing_analysis)
                 session.commit()
@@ -657,9 +639,12 @@ async def process_session(
                 new_analysis = SessionAnalysis(
                     session_uuid=session_uuid,
                     user_id=user_id,
-                    narrative={"text": narrative},
+                    narrative={"text": narrative, "semantic_bundle": semantic_bundle.model_dump(mode="json")},
                     psychometrics=psychometrics,
-                    intent_analysis=intent_analysis,
+                    intent_analysis={
+                        "intent_analysis": intent_analysis,
+                        "llm_output": llm_output,
+                    },
                     insights=[insight.dict() for insight in all_insights]
                 )
                 session.add(new_analysis)
@@ -672,13 +657,15 @@ async def process_session(
             
         # 6. Retorna os resultados completos
         from models.models import SessionProcessStats
-        return {
+        payload = {
             "session_uuid": session_uuid,
             "user_id": user_id,
             "narrative": narrative,
             "psychometrics": psychometrics,
             "intent_analysis": intent_analysis,
             "insights": [insight.dict() for insight in all_insights],
+            "semantic_bundle": semantic_bundle.model_dump(mode="json"),
+            "llm_output": llm_output,
             "stats": SessionProcessStats(
                 total_events=len(rrweb_events),
                 kinematic_vectors=len(processed.kinematics),
@@ -687,9 +674,14 @@ async def process_session(
                 rage_clicks=len(insights_rage)
             ).dict()
         }
+
+        print(f"process_session payload: {json.dumps(payload, ensure_ascii=False)}")
+
+        return payload
         
     except Exception as e:
-        print(f"✗ Erro no pipeline de análise: {e}")
+        print(f"✗ Erro no pipeline de análise: {type(e).__name__}: {e}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao processar sessão: {str(e)}"

@@ -23,7 +23,7 @@ class UserAction(BaseModel):
     Focado em intenção semântica e contexto de interface.
     """
     timestamp: int
-    action_type: str = Field(..., description="'click' | 'input' | 'navigation' | 'resize'")
+    action_type: str = Field(..., description="'click' | 'input' | 'navigation' | 'resize' | 'scroll'")
     target_id: Optional[int] = None
     details: Optional[str] = Field(None, description="Contexto rico: HTML simplificado, URL, ou valor input")
 
@@ -83,106 +83,166 @@ class SessionPreprocessor:
         
         SOURCE_MOUSE_MOVE = 1
         SOURCE_MOUSE_INTERACTION = 2
+        SOURCE_SCROLL = 3
+        SOURCE_RESIZE = 4
         SOURCE_INPUT = 5
         
         # Tipos de interação de mouse
         INTERACTION_CLICK = 2
 
         # --- LOOP ÚNICO (O(N)) ---
-        for event in events:
-            current_raw_ts = event.timestamp
-            delta_ts = current_raw_ts - start_time
-            last_timestamp = current_raw_ts
-            
-            evt_type = event.type
-            data = event.data or {}
+        for idx, event in enumerate(events):
+            try:
+                current_raw_ts = event.timestamp
+                delta_ts = current_raw_ts - start_time
+                last_timestamp = current_raw_ts
 
-            # --- Ramo A: Reconstrução de Contexto (DOM) ---
-            if evt_type == TYPE_DOM_SNAPSHOT:
-                root_node = data.get('node')
-                if root_node:
-                    SessionPreprocessor._flatten_dom_tree(root_node, dom_map)
+                evt_type = event.type
+                data = event.data or {}
 
-            # --- Ramo B: Meta Eventos (Navegação/Viewport) ---
-            elif evt_type == TYPE_META:
-                href = data.get('href')
-                width = data.get('width')
-                
-                if href:
-                    actions.append(UserAction(
-                        timestamp=delta_ts,
-                        action_type='navigation',
-                        details=f"URL: {href}"
-                    ))
-                elif width:
-                    actions.append(UserAction(
-                        timestamp=delta_ts,
-                        action_type='resize',
-                        details=f"Viewport: {width}x{data.get('height')}"
-                    ))
+                # --- Ramo A: Reconstrução de Contexto (DOM) ---
+                if evt_type == TYPE_DOM_SNAPSHOT:
+                    root_node = data.get('node')
+                    if root_node:
+                        SessionPreprocessor._flatten_dom_tree(root_node, dom_map)
 
-            # --- Ramo C: Eventos Incrementais ---
-            elif evt_type == TYPE_INCREMENTAL:
-                source = data.get('source')
+                # --- Ramo B: Meta Eventos (Navegação/Viewport) ---
+                elif evt_type == TYPE_META:
+                    href = data.get('href')
+                    width = data.get('width')
 
-                # C.1: Cinemática (ML) - Descompactando posições
-                if source == SOURCE_MOUSE_MOVE:
-                    positions = data.get('positions', [])
-                    for pos in positions:
-                        # pos format: [x, y, id, timeOffset]
-                        if len(pos) >= 2:
-                            x, y = pos[0], pos[1]
-                            # timeOffset é relativo ao timestamp do evento pai
-                            p_offset = pos[3] if len(pos) >= 4 else 0
-                            
-                            # Validar coordenadas (ignorar negativos extremos ou outliers óbvios)
-                            if x >= 0 and y >= 0:
-                                kinematics.append(KinematicVector(
-                                    timestamp=delta_ts + p_offset,
-                                    x=x,
-                                    y=y
-                                ))
-
-                # C.2: Ações do Usuário (LLM) - Cliques
-                elif source == SOURCE_MOUSE_INTERACTION:
-                    i_type = data.get('type')
-                    if i_type == INTERACTION_CLICK:
-                        target_id = data.get('id')
-                        # Lookup O(1) no mapa gerado
-                        node_html = dom_map.get(target_id, "unknown_element")
-                        
+                    if href:
                         actions.append(UserAction(
                             timestamp=delta_ts,
-                            action_type='click',
-                            target_id=target_id,
-                            details=f"Element: {node_html} | Coords: ({data.get('x')}, {data.get('y')})"
+                            action_type='navigation',
+                            details=f"URL: {href}"
+                        ))
+                    elif width:
+                        actions.append(UserAction(
+                            timestamp=delta_ts,
+                            action_type='resize',
+                            details=f"Viewport: {width}x{data.get('height')}"
                         ))
 
-                # C.3: Ações do Usuário (LLM) - Inputs
-                elif source == SOURCE_INPUT:
-                    target_id = data.get('id')
-                    text_val = data.get('text', '')
-                    is_checked = data.get('isChecked')
-                    
-                    details = ""
-                    if is_checked is not None:
-                        details = f"Checked: {is_checked}"
-                    else:
-                        # Privacidade e Economia: Truncar inputs longos
-                        safe_text = text_val[:40] + "..." if len(text_val) > 40 else text_val
-                        details = f"Typed: '{safe_text}'"
+                # --- Ramo C: Eventos Incrementais ---
+                elif evt_type == TYPE_INCREMENTAL:
+                    source = data.get('source')
 
-                    # Node enrichment se possível
-                    node_context = dom_map.get(target_id, "")
-                    if node_context:
-                        details += f" on {node_context}"
+                    # C.1: Cinemática (ML) - Descompactando posições
+                    if source == SOURCE_MOUSE_MOVE:
+                        positions = data.get('positions', [])
+                        if not isinstance(positions, list):
+                            logger.debug(
+                                "Skipping mouse move event %s because positions is %s",
+                                idx,
+                                type(positions).__name__,
+                            )
+                            continue
 
-                    actions.append(UserAction(
-                        timestamp=delta_ts,
-                        action_type='input',
-                        target_id=target_id,
-                        details=details
-                    ))
+                        for pos in positions:
+                            if logger.isEnabledFor(logging.DEBUG):
+                                logger.debug("Formato de pos detectado: %s", type(pos).__name__)
+
+                            x = None
+                            y = None
+                            p_offset = 0
+
+                            # Formato dict
+                            if isinstance(pos, dict):
+                                x = pos.get('x')
+                                y = pos.get('y')
+                                p_offset = pos.get('timeOffset', 0) or 0
+
+                            # Formato lista/tupla
+                            elif isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                                x = pos[0]
+                                y = pos[1]
+                                p_offset = pos[3] if len(pos) >= 4 else 0
+
+                            # Ignora formatos inválidos
+                            if x is None or y is None:
+                                continue
+
+                            # Validar coordenadas
+                            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                                if x >= 0 and y >= 0:
+                                    kinematics.append(KinematicVector(
+                                        timestamp=delta_ts + int(p_offset or 0),
+                                        x=int(x),
+                                        y=int(y)
+                                    ))
+
+                    # C.2: Ações do Usuário (LLM) - Cliques
+                    elif source == SOURCE_MOUSE_INTERACTION:
+                        i_type = data.get('type')
+                        if i_type == INTERACTION_CLICK:
+                            target_id = data.get('id')
+                            # Lookup O(1) no mapa gerado
+                            node_html = dom_map.get(target_id, "unknown_element")
+
+                            actions.append(UserAction(
+                                timestamp=delta_ts,
+                                action_type='click',
+                                target_id=target_id,
+                                details=f"Element: {node_html} | Coords: ({data.get('x')}, {data.get('y')})"
+                            ))
+
+                    # C.3: Ações do Usuário (LLM) - Scroll
+                    elif source == SOURCE_SCROLL:
+                        delta_y = data.get('deltaY', data.get('y'))
+                        scroll_y = data.get('scrollY')
+                        if delta_y is not None or scroll_y is not None:
+                            direction = "down" if (delta_y or scroll_y or 0) > 0 else "up" if (delta_y or scroll_y or 0) < 0 else "neutral"
+                            actions.append(UserAction(
+                                timestamp=delta_ts,
+                                action_type='scroll',
+                                details=f"Scroll: direction={direction} deltaY={delta_y} scrollY={scroll_y}"
+                            ))
+
+                    # C.4: Redimensionamento/Viewport
+                    elif source == SOURCE_RESIZE:
+                        width = data.get('width')
+                        if width:
+                            actions.append(UserAction(
+                                timestamp=delta_ts,
+                                action_type='resize',
+                                details=f"Viewport: {width}x{data.get('height')}"
+                            ))
+
+                    # C.5: Ações do Usuário (LLM) - Inputs
+                    elif source == SOURCE_INPUT:
+                        target_id = data.get('id')
+                        text_val = data.get('text', '')
+                        is_checked = data.get('isChecked')
+
+                        details = ""
+                        if is_checked is not None:
+                            details = f"Checked: {is_checked}"
+                        else:
+                            # Privacidade e Economia: Truncar inputs longos
+                            safe_text = text_val[:40] + "..." if len(text_val) > 40 else text_val
+                            details = f"Typed: '{safe_text}'"
+
+                        # Node enrichment se possível
+                        node_context = dom_map.get(target_id, "")
+                        if node_context:
+                            details += f" on {node_context}"
+
+                        actions.append(UserAction(
+                            timestamp=delta_ts,
+                            action_type='input',
+                            target_id=target_id,
+                            details=details
+                        ))
+            except Exception as exc:
+                logger.warning(
+                    "Skipping malformed rrweb event at index %s (type=%s): %s: %s",
+                    idx,
+                    getattr(event, "type", None),
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
 
         # 3. Consolidação Final
         total_duration = last_timestamp - start_time

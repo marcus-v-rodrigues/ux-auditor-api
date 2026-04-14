@@ -174,6 +174,91 @@ class SessionProcessStats(BaseModel):
     rage_clicks: int
 
 
+class SemanticSessionSummary(BaseModel):
+    """
+    Resumo determinístico da sessão para consumo pelo LLM.
+    """
+    duration_ms: int
+    pages: int
+    clicks: int
+    inputs: int
+    scrolls: int
+    mouse_moves: int
+    hover_events: int = 0
+    idle_periods_gt_3s: int = 0
+    viewport_changes: int = 0
+    revisits_by_element: int = 0
+    revisits_by_group: int = 0
+    value_changes: int = 0
+
+
+class TaskSegment(BaseModel):
+    """
+    Bloco coerente de interação observado na sessão.
+    """
+    segment_id: int
+    start: int
+    end: int
+    dominant_area: Optional[str] = None
+    dominant_pattern: Optional[str] = None
+    dominant_target_group: Optional[str] = None
+    action_count: int = 0
+    break_reason: Optional[str] = None
+
+
+class HeuristicEvidence(BaseModel):
+    """
+    Evidência comportamental estruturada. Não carrega interpretação subjetiva.
+    """
+    type: str
+    timestamp: Optional[int] = None
+    start: Optional[int] = None
+    end: Optional[int] = None
+    duration_ms: Optional[int] = None
+    target: Optional[str] = None
+    target_group: Optional[str] = None
+    related_targets: List[str] = Field(default_factory=list)
+    evidence_strength: float = 0.0
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    context_before: Optional[Dict[str, Any]] = None
+    context_after: Optional[Dict[str, Any]] = None
+
+
+class CompactAction(BaseModel):
+    """
+    Ação compactada, legível e estável para contexto do LLM.
+    """
+    t: int
+    kind: str
+    target: Optional[str] = None
+    semantic_label: Optional[str] = None
+    target_group: Optional[str] = None
+    page: Optional[str] = None
+    count: int = 1
+    start: Optional[int] = None
+    end: Optional[int] = None
+    details: Optional[str] = None
+    value: Optional[str] = None
+    checked: Optional[bool] = None
+    pattern: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticSessionBundle(BaseModel):
+    """
+    JSON intermediário otimizado para o LLM.
+    """
+    session_summary: SemanticSessionSummary
+    task_segments: List[TaskSegment] = Field(default_factory=list)
+    action_trace_compact: List[CompactAction] = Field(default_factory=list)
+    behavioral_signals: Dict[str, Any] = Field(default_factory=dict)
+    candidate_meaningful_moments: List[HeuristicEvidence] = Field(default_factory=list)
+    heuristic_events: List[HeuristicEvidence] = Field(default_factory=list)
+    dominant_patterns: List[Dict[str, Any]] = Field(default_factory=list)
+    observed_facts: Dict[str, Any] = Field(default_factory=dict)
+    derived_signals: Dict[str, Any] = Field(default_factory=dict)
+
+
 class SessionProcessResponse(BaseModel):
     """
     Resposta completa do processamento de sessão.
@@ -186,6 +271,8 @@ class SessionProcessResponse(BaseModel):
     intent_analysis: Dict[str, Any]
     insights: List[Dict[str, Any]]
     stats: SessionProcessStats
+    semantic_bundle: Optional[Dict[str, Any]] = None
+    llm_output: Optional[Dict[str, Any]] = None
 
 
 class RegisterRequest(BaseModel):
