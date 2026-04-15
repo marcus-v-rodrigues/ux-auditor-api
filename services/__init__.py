@@ -28,6 +28,7 @@ from services.pipeline import (
     SessionPreprocessor,
     TaskSegmentationResult,
     TraceCompressionResult,
+    UserAction,
     build_semantic_artifacts,
     build_semantic_session_bundle,
     compress_action_trace,
