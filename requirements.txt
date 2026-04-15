@@ -13,3 +13,6 @@ requests
 aioboto3
 sqlmodel
 psycopg2-binary
+pydantic-ai
+instructor
+openai

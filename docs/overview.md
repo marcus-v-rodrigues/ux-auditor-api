@@ -8,6 +8,7 @@ O propósito central é automatizar a auditoria de interfaces, identificando:
 2.  **Anomalias Comportamentais:** Movimentos de mouse erráticos detectados via Inteligência Artificial.
 3.  **Interpretação Estruturada:** Síntese analítica via LLM a partir de um bundle semântico intermediário.
 4.  **Hipóteses Comportamentais:** Inferências controladas com evidência explícita, confiança e ambiguidades.
+5.  **Agentes Tipados:** Três agentes LLM especializados com contratos Pydantic e validação estruturada.
 
 ## Arquitetura e Lógica
 ```mermaid
@@ -21,8 +22,10 @@ graph TD
     subgraph Pipeline
         F1[Pré-processamento] --> F2[Análise Heurística]
         F1 --> F3[Análise ML]
-        F1 --> F4[Bundle Semântico]
-        F4 --> F5[Motor LLM Estruturado]
+        F1 --> F4[Artefatos Semânticos]
+        F4 --> F5[Agente 1: Contexto da Página]
+        F5 --> F6[Agente 2: Dicionário Semântico]
+        F6 --> F7[Agente 3: Síntese Analítica]
     end
     F2 & F3 & F5 --> G[(PostgreSQL: SQLModel)]
 ```
@@ -34,7 +37,8 @@ O sistema segue uma arquitetura orientada a serviços e processamento assíncron
 3.  **Pipeline de Processamento (Worker):**
     *   **Pré-processamento O(N):** Uma única passagem pelos dados separa vetores cinemáticos de ações semânticas.
     *   **Análise de Baixo Nível:** Execução de algoritmos de ML (*Isolation Forest*) e heurísticas determinísticas.
-    *   **Análise de Alto Nível:** LLM interpreta apenas o bundle semântico intermediário e produz análise estruturada.
+    *   **Camada Determinística Semântica:** Compressão, segmentação, evidências e artefatos intermediários tipados.
+    *   **Análise de Alto Nível:** Três agentes LLM tipados, com `PydanticAI` como orquestrador e `Instructor` como validador/runner estruturado.
 4.  **Persistência:** Resultados consolidados em banco de dados **PostgreSQL** via **SQLModel**.
 
 ## Contrato do Frontend

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from models.models import SemanticSessionBundle
 from services.data_processor import ProcessedSession, SessionPreprocessor
 from services.evidence_detector import BehavioralEvidenceResult, detect_behavioral_evidence
+from services.semantic_artifacts import build_semantic_artifacts
 from services.semantic_preprocessor import SemanticPreprocessor
 from services.task_segmenter import TaskSegmentationResult, segment_task_blocks
 from services.trace_compressor import TraceCompressionResult, compress_action_trace
@@ -55,6 +56,12 @@ class SemanticSessionSummarizer:
             extraction.kinematics,
             segmentation.task_segments,
         )
+        page_artifacts, element_candidates, evidence_catalog = build_semantic_artifacts(
+            extraction,
+            compression,
+            segmentation,
+            behavioral,
+        )
 
         # Atualização dinâmica do sumário com dados provenientes da detecção de heurísticas temporais.
         session_summary = extraction.session_summary.model_copy(
@@ -69,6 +76,13 @@ class SemanticSessionSummarizer:
         observed_facts["session_summary"] = session_summary.model_dump()
         observed_facts["total_actions"] = len(extraction.semantic_actions)
         observed_facts["total_segments"] = len(segmentation.task_segments)
+        observed_facts["page_artifacts"] = page_artifacts.model_dump(mode="json")
+        observed_facts["element_candidates_preview"] = [
+            candidate.model_dump(mode="json") for candidate in element_candidates[:10]
+        ]
+        observed_facts["evidence_catalog_preview"] = [
+            evidence.model_dump(mode="json") for evidence in evidence_catalog[:12]
+        ]
 
         # Cálculo de Sinais Derivados: Métricas de alto nível que ajudam o LLM a entender a 'temperatura' da sessão.
         derived_signals: Dict[str, Any] = {
@@ -122,6 +136,9 @@ class SemanticSessionSummarizer:
         # Retorno do bundle completo: o contrato final entre o processamento determinístico e o motor generativo.
         return SemanticSessionBundle(
             session_summary=session_summary,
+            page_artifacts=page_artifacts,
+            element_candidates=element_candidates,
+            evidence_catalog=evidence_catalog,
             task_segments=segmentation.task_segments,
             action_trace_compact=compression.action_trace_compact,
             behavioral_signals=behavioral_signals,

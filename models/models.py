@@ -250,11 +250,99 @@ class CompactAction(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PageArtifacts(BaseModel):
+    """
+    Artefatos determinísticos da página gerados antes da etapa LLM.
+    Funcionam como o payload compacto da camada de contexto macro.
+    """
+    page_key: str = ""
+    primary_page: Optional[str] = None
+    page_history: List[str] = Field(default_factory=list)
+    page_transitions: List[Dict[str, Any]] = Field(default_factory=list)
+    top_regions: List[Dict[str, Any]] = Field(default_factory=list)
+    top_targets: List[Dict[str, Any]] = Field(default_factory=list)
+    interaction_distribution: Dict[str, int] = Field(default_factory=dict)
+    session_summary: Dict[str, Any] = Field(default_factory=dict)
+    notes: List[str] = Field(default_factory=list)
+
+
+class SemanticElementCandidate(BaseModel):
+    """
+    Candidato determinístico a dicionário semântico.
+    É alimentado apenas por fatos observáveis da sessão.
+    """
+    target: str
+    target_group: Optional[str] = None
+    semantic_label: Optional[str] = None
+    kind: Optional[str] = None
+    page: Optional[str] = None
+    html_snippet: Optional[str] = None
+    visit_count: int = 0
+    first_seen_ms: Optional[int] = None
+    last_seen_ms: Optional[int] = None
+    sample_values: List[str] = Field(default_factory=list)
+    sample_details: List[str] = Field(default_factory=list)
+
+
+class CatalogedEvidence(BaseModel):
+    """
+    Evidência curta, verificável e rastreável para a síntese final.
+    """
+    evidence_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    category: str
+    label: str
+    description: str
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source_refs: List[str] = Field(default_factory=list)
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PageContextInference(BaseModel):
+    """
+    Saída tipada da etapa LLM 1: interpretação do contexto macro da página.
+    """
+    page_kind: str = ""
+    page_goal: str = ""
+    canonical_regions: List[str] = Field(default_factory=list)
+    salient_controls: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_used: List[str] = Field(default_factory=list)
+    ambiguity_notes: List[str] = Field(default_factory=list)
+
+
+class SemanticElementProfile(BaseModel):
+    """
+    Saída tipada da etapa LLM 2: tradução semântica de elementos relevantes.
+    """
+    target: str
+    canonical_name: str
+    semantic_role: str
+    target_group: Optional[str] = None
+    page: Optional[str] = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_used: List[str] = Field(default_factory=list)
+    aliases: List[str] = Field(default_factory=list)
+
+
+class SemanticElementDictionary(BaseModel):
+    """
+    Envelope da saída da etapa LLM 2.
+    """
+    elements: List[SemanticElementProfile] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_used: List[str] = Field(default_factory=list)
+
+
 class SemanticSessionBundle(BaseModel):
     """
     JSON intermediário otimizado para o LLM.
     """
     session_summary: SemanticSessionSummary
+    page_artifacts: PageArtifacts = Field(default_factory=PageArtifacts)
+    page_context: Optional[PageContextInference] = None
+    element_candidates: List[SemanticElementCandidate] = Field(default_factory=list)
+    element_dictionary: List[SemanticElementProfile] = Field(default_factory=list)
+    evidence_catalog: List[CatalogedEvidence] = Field(default_factory=list)
     task_segments: List[TaskSegment] = Field(default_factory=list)
     action_trace_compact: List[CompactAction] = Field(default_factory=list)
     behavioral_signals: Dict[str, Any] = Field(default_factory=dict)
@@ -340,7 +428,11 @@ class LLMAnalysisResult(BaseModel):
     human_readable_summary: str = ""
     structured_fallback: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    prompt_version: str = "v1"
+    prompt_version: str = "v2"
+    page_context: Optional[PageContextInference] = None
+    element_dictionary: List[SemanticElementProfile] = Field(default_factory=list)
+    evidence_catalog: List[CatalogedEvidence] = Field(default_factory=list)
+    pipeline_trace: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionProcessResponse(BaseModel):
