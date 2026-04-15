@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from config import settings
 from models.models import TaskSegment
 from services.heuristics import SEGMENTATION_HEURISTICS, HeuristicContext
-from services.semantic_preprocessor import SemanticActionRecord
+from services.pipeline.semantic_preprocessor import SemanticActionRecord
 
 
 class TaskSegmentationResult(BaseModel):

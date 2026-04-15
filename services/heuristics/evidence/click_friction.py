@@ -60,4 +60,3 @@ def detect_rage_click(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

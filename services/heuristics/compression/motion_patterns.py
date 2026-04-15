@@ -22,4 +22,3 @@ def detect_visual_search_burst(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

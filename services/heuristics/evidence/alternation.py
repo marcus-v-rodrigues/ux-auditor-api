@@ -22,4 +22,3 @@ def detect_rapid_alternation(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

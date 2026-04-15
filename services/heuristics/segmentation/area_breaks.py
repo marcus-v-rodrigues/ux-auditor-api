@@ -56,4 +56,3 @@ def detect_area_shift(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

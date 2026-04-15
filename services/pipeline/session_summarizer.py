@@ -11,12 +11,12 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from models.models import SemanticSessionBundle
-from services.data_processor import ProcessedSession, SessionPreprocessor
-from services.evidence_detector import BehavioralEvidenceResult, detect_behavioral_evidence
-from services.semantic_artifacts import build_semantic_artifacts
-from services.semantic_preprocessor import SemanticPreprocessor
-from services.task_segmenter import TaskSegmentationResult, segment_task_blocks
-from services.trace_compressor import TraceCompressionResult, compress_action_trace
+from services.pipeline.data_processor import ProcessedSession, SessionPreprocessor
+from services.pipeline.evidence_detector import BehavioralEvidenceResult, detect_behavioral_evidence
+from services.pipeline.semantic_artifacts import build_semantic_artifacts
+from services.pipeline.semantic_preprocessor import SemanticPreprocessor
+from services.pipeline.task_segmenter import TaskSegmentationResult, segment_task_blocks
+from services.pipeline.trace_compressor import TraceCompressionResult, compress_action_trace
 
 
 class SemanticSessionSummarizer:

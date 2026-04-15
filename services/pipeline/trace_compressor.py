@@ -18,7 +18,7 @@ from models.models import CompactAction
 from services.heuristics import COMPRESSION_HEURISTICS, HeuristicContext
 from services.heuristics.base import make_match
 from services.heuristics.types import HeuristicMatch
-from services.semantic_preprocessor import SemanticActionRecord
+from services.pipeline.semantic_preprocessor import SemanticActionRecord
 
 
 class TraceCompressionResult(BaseModel):

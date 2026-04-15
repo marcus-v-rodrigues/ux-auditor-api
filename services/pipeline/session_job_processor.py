@@ -24,11 +24,9 @@ from models.models import (
     SessionProcessStats,
     User,
 )
-from services import (
-    SessionPreprocessor,
-    build_semantic_session_bundle,
-)
-from services.storage import storage_service
+from services.pipeline.data_processor import SessionPreprocessor
+from services.pipeline.session_summarizer import build_semantic_session_bundle
+from services.core.storage import storage_service
 
 logger = logging.getLogger(__name__)
 

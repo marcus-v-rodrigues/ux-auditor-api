@@ -55,4 +55,3 @@ def detect_scroll_continuous(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

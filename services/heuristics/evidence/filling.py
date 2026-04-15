@@ -39,4 +39,3 @@ def detect_out_of_order_filling(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

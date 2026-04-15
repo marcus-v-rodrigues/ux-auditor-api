@@ -43,4 +43,3 @@ def detect_group_revisit(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

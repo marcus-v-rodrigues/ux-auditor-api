@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from models.models import RRWebEvent, SemanticSessionSummary
-from services.data_processor import ProcessedSession
-from services.interaction_patterns import (
+from services.pipeline.data_processor import ProcessedSession
+from services.domain.interaction_patterns import (
     build_target_descriptor,
     infer_input_kind,
     infer_scroll_direction,

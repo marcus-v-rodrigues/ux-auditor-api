@@ -22,4 +22,3 @@ def detect_input_revision(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

@@ -22,4 +22,3 @@ def detect_repeated_activation(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

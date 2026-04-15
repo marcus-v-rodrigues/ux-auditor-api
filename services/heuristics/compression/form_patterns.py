@@ -22,4 +22,3 @@ def detect_sequential_form_filling(ctx: HeuristicContext) -> List[HeuristicMatch
             )
         )
     return matches
-

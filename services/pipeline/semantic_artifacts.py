@@ -15,10 +15,10 @@ from models.models import (
     PageArtifacts,
     SemanticElementCandidate,
 )
-from services.semantic_preprocessor import SemanticActionRecord, SemanticExtractionContext
-from services.task_segmenter import TaskSegmentationResult
-from services.trace_compressor import TraceCompressionResult
-from services.evidence_detector import BehavioralEvidenceResult
+from services.pipeline.semantic_preprocessor import SemanticActionRecord, SemanticExtractionContext
+from services.pipeline.task_segmenter import TaskSegmentationResult
+from services.pipeline.trace_compressor import TraceCompressionResult
+from services.pipeline.evidence_detector import BehavioralEvidenceResult
 
 
 def _top_items(counter: Dict[str, int], limit: int = 10) -> List[Dict[str, Any]]:

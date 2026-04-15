@@ -28,4 +28,3 @@ def detect_long_idle(ctx: HeuristicContext) -> List[HeuristicMatch]:
                 )
             )
     return matches
-

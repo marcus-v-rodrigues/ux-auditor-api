@@ -78,4 +78,3 @@ def detect_micro_hesitation_pattern(ctx: HeuristicContext) -> List[HeuristicMatc
             )
         )
     return matches
-

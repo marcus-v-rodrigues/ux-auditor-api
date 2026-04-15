@@ -22,4 +22,3 @@ def detect_backtracking(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

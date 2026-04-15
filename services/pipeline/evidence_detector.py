@@ -16,7 +16,7 @@ from config import settings
 from models.models import BoundingBox, InsightEvent, RRWebEvent
 from services.heuristics import BEHAVIOR_HEURISTICS, COMPRESSION_HEURISTICS, HeuristicContext
 from services.heuristics.types import HeuristicMatch
-from services.semantic_preprocessor import SemanticActionRecord
+from services.pipeline.semantic_preprocessor import SemanticActionRecord
 
 
 @dataclass

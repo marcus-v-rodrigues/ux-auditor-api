@@ -22,4 +22,3 @@ def detect_selection_oscillation(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-

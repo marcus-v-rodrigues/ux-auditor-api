@@ -27,4 +27,3 @@ def detect_page_change(ctx: HeuristicContext) -> List[HeuristicMatch]:
                 )
             )
     return matches
-

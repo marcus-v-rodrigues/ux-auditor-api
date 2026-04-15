@@ -1,5 +1,5 @@
 # Semantic package
-from .semantic_engine import (
+from semantic.semantic_engine import (
     generate_structured_session_analysis,
     generate_human_readable_narrative,
 )

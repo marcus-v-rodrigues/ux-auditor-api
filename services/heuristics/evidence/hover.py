@@ -23,4 +23,3 @@ def detect_hover_prolonged(ctx: HeuristicContext) -> List[HeuristicMatch]:
             )
         )
     return matches
-
