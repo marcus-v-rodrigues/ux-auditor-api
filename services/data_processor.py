@@ -10,10 +10,10 @@ logger = logging.getLogger("ux_auditor")
 
 class KinematicVector(BaseModel):
     """
-    Bucket Otimizado para ML (Isolation Forest).
+    Bucket otimizado para análise cinemática heurística.
     Focado exclusivamente em geometria e tempo para detecção de anomalias comportamentais.
     """
-    # Timestamp relativo permite que o modelo de ML ignore a data absoluta e foque no padrão do rastro
+    # Timestamp relativo permite que a heurística ignore a data absoluta e foque no padrão do rastro
     timestamp: int = Field(..., description="Delta em ms relativo ao início da sessão")
     # Coordenadas X e Y normalizadas capturadas da interação do cursor
     x: int
@@ -38,7 +38,7 @@ class ProcessedSession(BaseModel):
     """
     initial_timestamp: int
     total_duration: int
-    # Fluxo de dados geométricos para o motor de ML
+    # Fluxo de dados geométricos para o motor de heurísticas
     kinematics: List[KinematicVector] = Field(default_factory=list)
     # Fluxo de eventos semânticos para o motor de LLM/Heurísticas
     actions: List[UserAction] = Field(default_factory=list)
@@ -60,7 +60,7 @@ class SessionPreprocessor:
         Processa uma lista de eventos brutos do rrweb em estruturas otimizadas para análise.
         
         Executa um único loop O(N) para extrair:
-        - Vetores cinemáticos (timestamp, x, y) para detecção de anomalias via ML
+        - Vetores cinemáticos (timestamp, x, y) para detecção de anomalias via heurísticas
         - Ações do usuário (cliques, inputs, navegação) para geração de narrativa via LLM
         - Mapa DOM simplificado para contexto enriquecido das interações
         
@@ -142,7 +142,7 @@ class SessionPreprocessor:
                 elif evt_type == TYPE_INCREMENTAL:
                     source = data.get('source')
 
-                    # C.1: Cinemática (ML) - Extração de coordenadas para o Isolation Forest
+                    # C.1: Cinemática - Extração de coordenadas para a heurística de anomalias
                     if source == SOURCE_MOUSE_MOVE:
                         positions = data.get('positions', [])
                         # Validação para evitar quebras por dados malformados em um único evento

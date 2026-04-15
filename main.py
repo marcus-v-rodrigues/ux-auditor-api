@@ -31,7 +31,7 @@ from sqlmodel import Session as DBSession, select
 # Inicialização da Aplicação
 app = FastAPI(
     title="UX Auditor API",
-    description="Backend para análise comportamental de sessões de usuário (rrweb) via ML e LLM.",
+    description="Backend para análise comportamental de sessões de usuário (rrweb) via ML, heurísticas e LLM.",
     version="1.0.0"
 )
 

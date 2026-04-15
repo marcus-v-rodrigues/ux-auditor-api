@@ -2,7 +2,7 @@
 Orquestração do processamento assíncrono de sessões.
 
 Este módulo concentra o pipeline pesado para que o worker possa executar
-ML, heurísticas e LLM fora da request HTTP.
+heurísticas e LLM fora da request HTTP.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DBSession, select
 
 from models.models import (
+    BoundingBox,
     InsightEvent,
     RRWebEvent,
     SessionAnalysis,
@@ -26,7 +27,6 @@ from models.models import (
 from services import (
     SessionPreprocessor,
     build_semantic_session_bundle,
-    detect_behavioral_anomalies,
 )
 from services.storage import storage_service
 
@@ -154,12 +154,40 @@ def _persist_analysis(
 
 def _match_to_insight_event(match: Any) -> InsightEvent:
     """Converte um `HeuristicMatch` em um insight legível sem voltar ao contrato antigo."""
+    evidence = getattr(match, "evidence", {}) or {}
+    coordinates = None
+    if isinstance(evidence, dict):
+        if isinstance(evidence.get("bounding_box"), dict):
+            bbox = evidence["bounding_box"]
+            coordinates = {
+                "x": float(bbox.get("left", 0)) + float(bbox.get("width", 0)) / 2,
+                "y": float(bbox.get("top", 0)) + float(bbox.get("height", 0)) / 2,
+            }
+        elif isinstance(evidence.get("coordinates"), dict):
+            coordinates = evidence["coordinates"]
+    if not coordinates and isinstance(match.target_ref, str) and match.target_ref.startswith("cursor@"):
+        try:
+            cursor_x, cursor_y = match.target_ref.split("@", 1)[1].split(",", 1)
+            coordinates = {"x": float(cursor_x), "y": float(cursor_y)}
+        except (ValueError, AttributeError):
+            coordinates = None
+
     return InsightEvent(
         timestamp=match.start_ts or match.end_ts or 0,
         type="heuristic",
         severity="critical" if match.heuristic_name == "rage_click" else "medium",
-        message=match.heuristic_name.replace("_", " ").title(),
-        algorithm="RuleBased",
+        message={
+            "rage_click": "Rage Click Detected",
+            "erratic_motion": "Erratic Motion Detected",
+            "ml_erratic_motion": "Erratic Movement Detected (AI)",
+        }.get(match.heuristic_name, match.heuristic_name.replace("_", " ").title()),
+        boundingBox=BoundingBox(
+            top=float(coordinates["y"]) - 25,
+            left=float(coordinates["x"]) - 25,
+            width=50,
+            height=50,
+        ) if coordinates else None,
+        algorithm="IsolationForest" if match.heuristic_name == "ml_erratic_motion" else "RuleBased",
     )
 
 
@@ -223,17 +251,17 @@ async def process_session_events(
     intent_analysis = unpacked["intent_analysis"]
     structured_analysis = unpacked["structured_analysis"]
 
-    insights_ml = detect_behavioral_anomalies(processed.kinematics)
+    erratic_matches = [item for item in semantic_bundle.heuristic_events if item.heuristic_name == "ml_erratic_motion"]
     # O sinal de rage click agora é derivado do bundle semântico, não de um atalho legado.
     rage_matches = [item for item in semantic_bundle.heuristic_events if item.heuristic_name == "rage_click"]
     insights_rage = len(rage_matches)
-    all_insights = insights_ml + [_match_to_insight_event(item) for item in rage_matches]
+    all_insights = [_match_to_insight_event(item) for item in erratic_matches + rage_matches]
 
     stats = SessionProcessStats(
         total_events=len(rrweb_events),
         kinematic_vectors=len(processed.kinematics),
         user_actions=len(processed.actions),
-        ml_insights=len(insights_ml),
+        ml_insights=len(erratic_matches),
         rage_clicks=insights_rage,
     )
 

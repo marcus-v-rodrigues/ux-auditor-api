@@ -15,14 +15,14 @@ from services.heuristics.evidence.click_friction import detect_dead_click, detec
 from services.heuristics.evidence.filling import detect_out_of_order_filling, detect_sequential_form_filling
 from services.heuristics.evidence.hesitation import detect_long_hesitation, detect_micro_hesitation_pattern
 from services.heuristics.evidence.hover import detect_hover_prolonged
-from services.heuristics.evidence.motion import detect_erratic_motion, detect_visual_search_burst
+from services.heuristics.evidence.motion import detect_erratic_motion, detect_ml_erratic_motion, detect_visual_search_burst
 from services.heuristics.evidence.revision import detect_input_revision
 from services.heuristics.evidence.revisits import detect_element_revisit, detect_group_revisit
 from services.heuristics.segmentation.area_breaks import detect_area_shift
 from services.heuristics.segmentation.idle_breaks import detect_long_idle
 from services.heuristics.segmentation.page_breaks import detect_page_change
 
-EVIDENCE_HEURISTICS = [
+BEHAVIOR_HEURISTICS = [
     detect_long_hesitation,
     detect_micro_hesitation_pattern,
     detect_element_revisit,
@@ -33,6 +33,7 @@ EVIDENCE_HEURISTICS = [
     detect_dead_click,
     detect_rage_click,
     detect_hover_prolonged,
+    detect_ml_erratic_motion,
     detect_visual_search_burst,
     detect_erratic_motion,
     detect_backtracking,

@@ -108,7 +108,7 @@ docker-compose down
 ### 3. Pipeline de Processamento
 
 - Pré-processamento O(N) de eventos rrweb
-- Detecção de anomalias com `IsolationForest`
+- Detecção de anomalias com `IsolationForest` e heurísticas determinísticas
 - Detecção determinística de rage clicks
 - Montagem do bundle semântico e execução do LLM estruturado
 - Persistência de resultado em `session_analyses`

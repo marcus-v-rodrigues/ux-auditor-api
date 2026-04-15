@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 from config import settings
 from models.models import BoundingBox, InsightEvent, RRWebEvent
-from services.heuristics import COMPRESSION_HEURISTICS, EVIDENCE_HEURISTICS, HeuristicContext
+from services.heuristics import BEHAVIOR_HEURISTICS, COMPRESSION_HEURISTICS, HeuristicContext
 from services.heuristics.types import HeuristicMatch
 from services.semantic_preprocessor import SemanticActionRecord
 
@@ -55,7 +55,7 @@ def detect_behavioral_evidence(
 
     # Primeiro executamos as heurísticas de evidência, que alimentam a narrativa analítica.
     heuristic_matches = []
-    for heuristic in EVIDENCE_HEURISTICS:
+    for heuristic in BEHAVIOR_HEURISTICS:
         heuristic_matches.extend(heuristic(ctx))
 
     # Depois executamos as heurísticas de compressão, que também podem marcar momentos relevantes.
@@ -77,7 +77,7 @@ def detect_behavioral_evidence(
         "candidate_moment_count": len(candidate_moments),
         "total_actions": len(ordered_actions),
         "total_segments": len(segments),
-        "heuristic_registry_size": len(EVIDENCE_HEURISTICS),
+        "heuristic_registry_size": len(BEHAVIOR_HEURISTICS),
         "compression_registry_size": len(COMPRESSION_HEURISTICS),
     }
 

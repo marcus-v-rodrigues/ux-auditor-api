@@ -64,7 +64,7 @@ O registry atual separa as heurísticas em três famílias:
 
 - `SEGMENTATION_HEURISTICS`
 - `COMPRESSION_HEURISTICS`
-- `EVIDENCE_HEURISTICS`
+- `BEHAVIOR_HEURISTICS`
 
 Essa separação não é cosmética. Ela define em que etapa o sinal é consumido e como ele será usado depois.
 
@@ -112,7 +112,7 @@ Exemplos do que ela captura:
 
 ### 3. Evidência Comportamental
 
-Implementada em `services/evidence_detector.py` e registrada em `EVIDENCE_HEURISTICS`.
+Implementada em `services/evidence_detector.py` e registrada em `BEHAVIOR_HEURISTICS`.
 
 Heurísticas atuais:
 
@@ -128,6 +128,7 @@ Heurísticas atuais:
 - `hover_prolonged`
 - `visual_search_burst`
 - `erratic_motion`
+- `ml_erratic_motion`
 - `backtracking`
 - `sequential_form_filling`
 - `out_of_order_filling`

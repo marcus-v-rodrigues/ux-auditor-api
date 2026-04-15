@@ -108,9 +108,6 @@ def detect_erratic_motion_windows(ctx: HeuristicContext) -> List[Dict[str, Any]]
     if len(kinematics) < 8:
         return []
 
-    direction_changes_min = int(get_config(ctx, "erratic_motion_direction_changes_min", 6))
-    efficiency_max = float(get_config(ctx, "erratic_motion_path_efficiency_max", 0.45))
-
     points = [(float(item["x"]), float(item["y"])) for item in kinematics]
     total_distance = 0.0
     angles: List[float] = []
@@ -126,6 +123,8 @@ def detect_erratic_motion_windows(ctx: HeuristicContext) -> List[Dict[str, Any]]
     net_distance = distance(points[0], points[-1])
     efficiency = net_distance / total_distance if total_distance > 0 else 1.0
     angle_variance = float(np.var(np.diff(angles))) if len(angles) > 1 else 0.0
+    direction_changes_min = int(get_config(ctx, "erratic_motion_direction_changes_min", 6))
+    efficiency_max = float(get_config(ctx, "erratic_motion_path_efficiency_max", 0.45))
     if direction_changes >= direction_changes_min or efficiency <= efficiency_max:
         last = kinematics[-1]
         return [
@@ -140,4 +139,3 @@ def detect_erratic_motion_windows(ctx: HeuristicContext) -> List[Dict[str, Any]]
             }
         ]
     return []
-

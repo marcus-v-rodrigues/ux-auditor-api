@@ -9,6 +9,7 @@ em insights de UX.
 
 from .data_processor import SessionPreprocessor, KinematicVector, UserAction, ProcessedSession
 from .ml_analyzer import detect_behavioral_anomalies
+from .heuristics.evidence.motion import detect_erratic_motion
 from .semantic_preprocessor import SemanticPreprocessor, SemanticExtractionContext, SemanticActionRecord
 from .trace_compressor import compress_action_trace, TraceCompressionResult
 from .task_segmenter import segment_task_blocks, TaskSegmentationResult
@@ -20,13 +21,14 @@ from .storage import StorageService, storage_service
 # Exportação seletiva para facilitar o uso nos endpoints e workers
 __all__ = [
     'SessionPreprocessor',          # Pré-processador O(N) para dados básicos
-    'KinematicVector',             # Modelo de dados para ML (Isolation Forest)
+    'KinematicVector',             # Modelo de dados para análise cinemática heurística
     'UserAction',                  # Modelo de ação básica para narrativa
     'ProcessedSession',            # Container de sessão processada
     'SemanticPreprocessor',        # Extrator de fatos determinísticos
     'SemanticExtractionContext',   # Contexto intermediário do pipeline
     'SemanticActionRecord',        # Ação normalizada com metadados ricos
-    'detect_behavioral_anomalies', # Detector de anomalias cinemáticas via ML
+    'detect_behavioral_anomalies', # Detector ML reaproveitado como heurística
+    'detect_erratic_motion',       # Detector de anomalias cinemáticas via heurística
     'compress_action_trace',       # Algoritmo de compactação de traço
     'TraceCompressionResult',      # Resultado da compactação
     'segment_task_blocks',         # Segmentador de atividade em blocos
