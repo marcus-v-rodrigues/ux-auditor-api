@@ -27,7 +27,6 @@ from services import (
     SessionPreprocessor,
     build_semantic_session_bundle,
     detect_behavioral_anomalies,
-    detect_rage_clicks,
 )
 from services.storage import storage_service
 
@@ -153,6 +152,17 @@ def _persist_analysis(
     return new_analysis
 
 
+def _match_to_insight_event(match: Any) -> InsightEvent:
+    """Converte um `HeuristicMatch` em um insight legível sem voltar ao contrato antigo."""
+    return InsightEvent(
+        timestamp=match.start_ts or match.end_ts or 0,
+        type="heuristic",
+        severity="critical" if match.heuristic_name == "rage_click" else "medium",
+        message=match.heuristic_name.replace("_", " ").title(),
+        algorithm="RuleBased",
+    )
+
+
 def mark_analysis_status(
     session: DBSession,
     *,
@@ -214,15 +224,17 @@ async def process_session_events(
     structured_analysis = unpacked["structured_analysis"]
 
     insights_ml = detect_behavioral_anomalies(processed.kinematics)
-    insights_rage = detect_rage_clicks(rrweb_events)
-    all_insights = insights_ml + insights_rage
+    # O sinal de rage click agora é derivado do bundle semântico, não de um atalho legado.
+    rage_matches = [item for item in semantic_bundle.heuristic_events if item.heuristic_name == "rage_click"]
+    insights_rage = len(rage_matches)
+    all_insights = insights_ml + [_match_to_insight_event(item) for item in rage_matches]
 
     stats = SessionProcessStats(
         total_events=len(rrweb_events),
         kinematic_vectors=len(processed.kinematics),
         user_actions=len(processed.actions),
         ml_insights=len(insights_ml),
-        rage_clicks=len(insights_rage),
+        rage_clicks=insights_rage,
     )
 
     _persist_analysis(

@@ -1,0 +1,2 @@
+"""Heurísticas de compactação."""
+

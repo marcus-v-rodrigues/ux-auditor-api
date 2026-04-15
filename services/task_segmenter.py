@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from models.models import TaskSegment
+from services.heuristics import SEGMENTATION_HEURISTICS, HeuristicContext
 from services.semantic_preprocessor import SemanticActionRecord
 
 
@@ -44,6 +45,21 @@ def segment_task_blocks(actions: List[SemanticActionRecord]) -> TaskSegmentation
 
     # Garante que as ações estão em ordem cronológica estrita para a segmentação
     ordered = sorted(actions, key=lambda item: item.t)
+    segmentation_ctx = HeuristicContext(
+        actions=ordered,
+        kinematics=[],
+        dom_map={},
+        page_context=None,
+        config=settings.model_dump(),
+    )
+    segmentation_matches = []
+    for heuristic in SEGMENTATION_HEURISTICS:
+        segmentation_matches.extend(heuristic(segmentation_ctx))
+    break_by_ts = {
+        match.end_ts: match.heuristic_name
+        for match in segmentation_matches
+        if match.end_ts is not None
+    }
     segments: List[TaskSegment] = []
     current: List[SemanticActionRecord] = []
     segment_id = 1
@@ -84,6 +100,12 @@ def segment_task_blocks(actions: List[SemanticActionRecord]) -> TaskSegmentation
     # --- LOOP DE SEGMENTAÇÃO HEURÍSTICA ---
     for action in ordered:
         if not current:
+            current.append(action)
+            previous_action = action
+            continue
+
+        if action.t in break_by_ts:
+            flush(break_by_ts[action.t])
             current.append(action)
             previous_action = action
             continue
@@ -130,6 +152,7 @@ def segment_task_blocks(actions: List[SemanticActionRecord]) -> TaskSegmentation
         "segment_count": len(segments),
         "longest_segment_ms": max((segment.end - segment.start for segment in segments), default=0),
         "dominant_areas": [segment.dominant_area for segment in segments if segment.dominant_area],
+        "heuristic_breaks": len(segmentation_matches),
     }
 
     return TaskSegmentationResult(task_segments=segments, segment_summary=summary)

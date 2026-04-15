@@ -77,13 +77,14 @@ def _extract_top_evidence(bundle_payload: Dict[str, Any], limit: int = 12) -> Li
         for item in bundle_payload.get("session_bundle", {}).get(key, []) or []:
             if not isinstance(item, dict):
                 continue
-            evidence_type = item.get("type")
-            metrics = item.get("metrics") or {}
+            # O novo contrato expõe `heuristic_name` e `evidence` em vez de `type`/`metrics`.
+            evidence_type = item.get("heuristic_name") or item.get("type")
+            evidence_payload = item.get("evidence") or item.get("metrics") or {}
             descriptor = evidence_type or "unknown_evidence"
-            if metrics.get("count") is not None:
-                descriptor = f"{descriptor} count={metrics.get('count')}"
-            if item.get("target_group"):
-                descriptor = f"{descriptor} target_group={item.get('target_group')}"
+            if evidence_payload.get("count") is not None:
+                descriptor = f"{descriptor} count={evidence_payload.get('count')}"
+            if evidence_payload.get("target_group"):
+                descriptor = f"{descriptor} target_group={evidence_payload.get('target_group')}"
             if item.get("duration_ms") is not None:
                 descriptor = f"{descriptor} duration_ms={item.get('duration_ms')}"
             evidence.append(descriptor)

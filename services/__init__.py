@@ -9,7 +9,6 @@ em insights de UX.
 
 from .data_processor import SessionPreprocessor, KinematicVector, UserAction, ProcessedSession
 from .ml_analyzer import detect_behavioral_anomalies
-from .heuristic_analyzer import detect_rage_clicks
 from .semantic_preprocessor import SemanticPreprocessor, SemanticExtractionContext, SemanticActionRecord
 from .trace_compressor import compress_action_trace, TraceCompressionResult
 from .task_segmenter import segment_task_blocks, TaskSegmentationResult
@@ -28,7 +27,6 @@ __all__ = [
     'SemanticExtractionContext',   # Contexto intermediário do pipeline
     'SemanticActionRecord',        # Ação normalizada com metadados ricos
     'detect_behavioral_anomalies', # Detector de anomalias cinemáticas via ML
-    'detect_rage_clicks',          # Heurística legada de rage click
     'compress_action_trace',       # Algoritmo de compactação de traço
     'TraceCompressionResult',      # Resultado da compactação
     'segment_task_blocks',         # Segmentador de atividade em blocos

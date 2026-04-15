@@ -14,7 +14,10 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from config import settings
-from models.models import CompactAction, HeuristicEvidence
+from models.models import CompactAction
+from services.heuristics import COMPRESSION_HEURISTICS, HeuristicContext
+from services.heuristics.base import make_match
+from services.heuristics.types import HeuristicMatch
 from services.semantic_preprocessor import SemanticActionRecord
 
 
@@ -22,7 +25,7 @@ class TraceCompressionResult(BaseModel):
     """Container para o traço compactado e estatísticas de padrões detectados."""
     action_trace_compact: List[CompactAction] = Field(default_factory=list)
     dominant_patterns: List[Dict[str, Any]] = Field(default_factory=list)
-    candidate_meaningful_moments: List[HeuristicEvidence] = Field(default_factory=list)
+    candidate_meaningful_moments: List[HeuristicMatch] = Field(default_factory=list)
 
 
 def _window_kinematic_bursts(kinematics: List[Dict[str, int]]) -> List[CompactAction]:
@@ -139,15 +142,23 @@ def compress_action_trace(
     Quando a fusão não é possível, a ação atual é fechada e adicionada ao traço final.
     """
     if not actions:
+        compact = _window_kinematic_bursts(kinematics or [])
+        # Mesmo sem ações semânticas, ainda vale consultar os detectores de compressão.
+        ctx = HeuristicContext(actions=[], kinematics=kinematics or [], dom_map={}, page_context=None, config=settings.model_dump())
+        compression_matches = []
+        for heuristic in COMPRESSION_HEURISTICS:
+            compression_matches.extend(heuristic(ctx))
         return TraceCompressionResult(
-            action_trace_compact=_window_kinematic_bursts(kinematics or []),
+            action_trace_compact=compact,
+            dominant_patterns=[{"type": item.heuristic_name, "count": item.evidence.get("count", 1)} for item in compression_matches],
+            candidate_meaningful_moments=compression_matches,
         )
 
     # Garante ordem temporal para o algoritmo de janela
     ordered = sorted(actions, key=lambda item: item.t)
     compact: List[CompactAction] = []
     pattern_counter: Counter = Counter()
-    candidate_moments: List[HeuristicEvidence] = []
+    candidate_moments: List[HeuristicMatch] = []
 
     current: Optional[CompactAction] = None
 
@@ -180,22 +191,22 @@ def compress_action_trace(
         # Se não fundiu, salva a ação atual e começa uma nova
         compact.append(current)
         
-        # Registra 'Momentos Interessantes' (ações com repetição ou padrões específicos)
+        # Quando um bloco colapsa, registramos o bloco como um momento candidato.
         if current.count > 1 or current.pattern:
             candidate_moments.append(
-                HeuristicEvidence(
-                    type=current.pattern or f"compact_{current.kind}",
-                    timestamp=current.t,
-                    start=current.start,
-                    end=current.end,
-                    duration_ms=(current.end or current.t) - (current.start or current.t),
-                    target=current.target,
-                    target_group=current.target_group,
-                    related_targets=[current.target] if current.target else [],
-                    evidence_strength=min(1.0, 0.4 + 0.1 * current.count),
-                    metrics={"count": current.count, "kind": current.kind},
-                    context_before={"previous_kind": compact[-2].kind if len(compact) > 1 else None},
-                    context_after={"next_kind": record.kind},
+                make_match(
+                    current.pattern or f"compact_{current.kind}",
+                    "compression",
+                    confidence=min(1.0, 0.4 + 0.1 * current.count),
+                    start_ts=current.start,
+                    end_ts=current.end,
+                    target_ref=current.target or current.target_group or current.page,
+                    evidence={
+                        "count": current.count,
+                        "kind": current.kind,
+                        "previous_kind": compact[-2].kind if len(compact) > 1 else None,
+                        "next_kind": record.kind,
+                    },
                 )
             )
         current = _compact_from_record(record)
@@ -205,19 +216,19 @@ def compress_action_trace(
         compact.append(current)
         if current.count > 1 or current.pattern:
             candidate_moments.append(
-                HeuristicEvidence(
-                    type=current.pattern or f"compact_{current.kind}",
-                    timestamp=current.t,
-                    start=current.start,
-                    end=current.end,
-                    duration_ms=(current.end or current.t) - (current.start or current.t),
-                    target=current.target,
-                    target_group=current.target_group,
-                    related_targets=[current.target] if current.target else [],
-                    evidence_strength=min(1.0, 0.4 + 0.1 * current.count),
-                    metrics={"count": current.count, "kind": current.kind},
-                    context_before={"previous_kind": compact[-2].kind if len(compact) > 1 else None},
-                    context_after=None,
+                make_match(
+                    current.pattern or f"compact_{current.kind}",
+                    "compression",
+                    confidence=min(1.0, 0.4 + 0.1 * current.count),
+                    start_ts=current.start,
+                    end_ts=current.end,
+                    target_ref=current.target or current.target_group or current.page,
+                    evidence={
+                        "count": current.count,
+                        "kind": current.kind,
+                        "previous_kind": compact[-2].kind if len(compact) > 1 else None,
+                        "next_kind": None,
+                    },
                 )
             )
 
@@ -235,9 +246,25 @@ def compress_action_trace(
     if kinematic_bursts:
         dominant_patterns.append({"type": "visual_search_burst", "count": len(kinematic_bursts)})
 
+    # Reexecutamos o registry de compressão sobre o traço completo para capturar padrões
+    # que dependem da visão global, não só dos blocos fundidos no loop principal.
+    ctx = HeuristicContext(
+        actions=ordered,
+        kinematics=kinematics or [],
+        dom_map={},
+        page_context=None,
+        config=settings.model_dump(),
+    )
+    compression_matches = []
+    for heuristic in COMPRESSION_HEURISTICS:
+        compression_matches.extend(heuristic(ctx))
+    candidate_moments.extend(compression_matches)
+
+    for match in compression_matches:
+        dominant_patterns.append({"type": match.heuristic_name, "count": match.evidence.get("activation_count", match.evidence.get("count", 1))})
+
     return TraceCompressionResult(
         action_trace_compact=compact,
         dominant_patterns=dominant_patterns,
         candidate_meaningful_moments=candidate_moments,
     )
-

@@ -58,7 +58,11 @@ class SemanticSessionSummarizer:
 
         # Atualização dinâmica do sumário com dados provenientes da detecção de heurísticas temporais.
         session_summary = extraction.session_summary.model_copy(
-            update={"idle_periods_gt_3s": sum(1 for item in behavioral.heuristic_events if item.type == "long_hesitation")}
+            update={
+                "idle_periods_gt_3s": sum(
+                    1 for item in behavioral.heuristic_events if item.heuristic_name == "long_hesitation"
+                )
+            }
         )
 
         observed_facts = dict(extraction.observed_facts)
@@ -95,7 +99,9 @@ class SemanticSessionSummarizer:
                 "compressed_action_count": len(compression.action_trace_compact),
                 "segment_count": len(segmentation.task_segments),
                 "page_count": session_summary.pages,
-                "long_hesitation_count": sum(1 for item in behavioral.heuristic_events if item.type == "long_hesitation"),
+                "long_hesitation_count": sum(
+                    1 for item in behavioral.heuristic_events if item.heuristic_name == "long_hesitation"
+                ),
             }
         )
 
@@ -107,9 +113,9 @@ class SemanticSessionSummarizer:
         dominant_patterns = list(compression.dominant_patterns)
         dominant_patterns.extend(
             [
-                {"type": item.type, "count": item.metrics.get("count", 1)}
+                {"type": item.heuristic_name, "count": item.evidence.get("count", 1)}
                 for item in behavioral.candidate_meaningful_moments
-                if item.type and item.type not in {"dead_click", "hover_prolonged"}
+                if item.heuristic_name and item.heuristic_name not in {"dead_click", "hover_prolonged"}
             ]
         )
 

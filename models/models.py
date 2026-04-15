@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 from sqlmodel import SQLModel, Field as SQLField, Relationship
 from sqlalchemy import Column, String, DateTime, func, ForeignKey, JSON, Index
 
+from services.heuristics.types import HeuristicMatch
+
 
 # ============================================
 # Modelos de Tabela (ORM - SQLModel)
@@ -228,24 +230,6 @@ class TaskSegment(BaseModel):
     break_reason: Optional[str] = None
 
 
-class HeuristicEvidence(BaseModel):
-    """
-    Evidência comportamental estruturada. Não carrega interpretação subjetiva.
-    """
-    type: str
-    timestamp: Optional[int] = None
-    start: Optional[int] = None
-    end: Optional[int] = None
-    duration_ms: Optional[int] = None
-    target: Optional[str] = None
-    target_group: Optional[str] = None
-    related_targets: List[str] = Field(default_factory=list)
-    evidence_strength: float = 0.0
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    context_before: Optional[Dict[str, Any]] = None
-    context_after: Optional[Dict[str, Any]] = None
-
-
 class CompactAction(BaseModel):
     """
     Ação compactada, legível e estável para contexto do LLM.
@@ -274,8 +258,8 @@ class SemanticSessionBundle(BaseModel):
     task_segments: List[TaskSegment] = Field(default_factory=list)
     action_trace_compact: List[CompactAction] = Field(default_factory=list)
     behavioral_signals: Dict[str, Any] = Field(default_factory=dict)
-    candidate_meaningful_moments: List[HeuristicEvidence] = Field(default_factory=list)
-    heuristic_events: List[HeuristicEvidence] = Field(default_factory=list)
+    candidate_meaningful_moments: List[HeuristicMatch] = Field(default_factory=list)
+    heuristic_events: List[HeuristicMatch] = Field(default_factory=list)
     dominant_patterns: List[Dict[str, Any]] = Field(default_factory=list)
     observed_facts: Dict[str, Any] = Field(default_factory=dict)
     derived_signals: Dict[str, Any] = Field(default_factory=dict)
