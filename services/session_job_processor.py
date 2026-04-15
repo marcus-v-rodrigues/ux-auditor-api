@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import semantic
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DBSession, select
 
 from models.models import (
@@ -87,7 +88,14 @@ def _ensure_user(session: DBSession, user_id: str) -> None:
         email=f"{user_id}@janus-idp.local",
     )
     session.add(new_user)
-    session.commit()
+
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        # Outro worker pode ter criado o usuário entre o get() e o commit().
+        if session.get(User, user_id) is None:
+            raise
 
 
 def _persist_analysis(
@@ -153,6 +161,8 @@ def mark_analysis_status(
     status: str,
     processing_error: Optional[str] = None,
 ) -> SessionAnalysis:
+    _ensure_user(session, user_id)
+
     statement = select(SessionAnalysis).where(SessionAnalysis.session_uuid == session_uuid)
     existing_analysis = session.exec(statement).first()
 

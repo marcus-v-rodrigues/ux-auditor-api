@@ -1,4 +1,5 @@
 import uvicorn
+import logging
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
@@ -33,6 +34,8 @@ app = FastAPI(
     description="Backend para análise comportamental de sessões de usuário (rrweb) via ML e LLM.",
     version="1.0.0"
 )
+
+logger = logging.getLogger(__name__)
 
 # Configuração Global de CORS
 # Permite integração com frontends Next.js e extensões de navegador
@@ -417,6 +420,8 @@ async def ingest_session(
         "timestamp": datetime.utcnow().isoformat(),
     }
 
+    print(message_payload)
+
     try:
         await publish_job_message(message_payload)
         return SessionJobSubmissionResponse(
@@ -442,6 +447,12 @@ async def get_session_status(
     """
     Consulta o estado do processamento assíncrono de uma sessão.
     """
+    logger.info(
+        "Consultando status da sessão | session_uuid=%s | user_id=%s",
+        session_uuid,
+        current_user.user_id,
+    )
+
     statement = select(SessionAnalysis).where(
         SessionAnalysis.session_uuid == session_uuid,
         SessionAnalysis.user_id == current_user.user_id,
@@ -449,25 +460,36 @@ async def get_session_status(
     analysis = session.exec(statement).first()
 
     if not analysis:
-        return SessionJobStatusResponse(
+        response = SessionJobStatusResponse(
             session_uuid=session_uuid,
             user_id=current_user.user_id,
             status="queued",
             processing_error=None,
             result=None,
         )
+        logger.info("Sessão ainda sem análise persistida | response=%s", response.model_dump())
+        print(response.model_dump(), flush=True)
+        return response
 
     result = None
     if analysis.processing_status == "completed":
         result = _session_analysis_to_response(analysis)
 
-    return SessionJobStatusResponse(
+    response = SessionJobStatusResponse(
         session_uuid=session_uuid,
         user_id=current_user.user_id,
         status=analysis.processing_status,
         processing_error=analysis.processing_error,
         result=result,
     )
+
+    logger.info(
+        "Status da sessão recuperado | analysis_status=%s | response=%s",
+        analysis.processing_status,
+        response.model_dump(),
+    )
+    print(response.model_dump(), flush=True)
+    return response
 
 if __name__ == "__main__":
     # Execução do servidor via Uvicorn usando configurações do config.py

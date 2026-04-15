@@ -77,7 +77,6 @@ def _get_cached_jwks() -> Dict[str, Any]:
     # Implementação de cache simples baseada no tempo do sistema (monotonic clock)
     current_time = time.monotonic()
     if _jwks_cache and _jwks_cache_time and (current_time - _jwks_cache_time) < _JWKS_CACHE_TTL:
-        print("🔑 JWKS carregado do cache")
         return _jwks_cache
 
     try:
@@ -125,7 +124,6 @@ def get_jwks_public_key(token: str) -> Any:
         header = jwt.get_unverified_header(token)
         kid = header.get("kid")
         alg = header.get("alg")
-        print(f"🔎 Header JWT: kid={kid}, alg={alg}")
         
         # O Janus IDP deve fornecer o 'kid' para permitir a rotação de chaves
         if not kid:
@@ -174,7 +172,6 @@ def get_jwks_public_key(token: str) -> Any:
         )
 
     try:
-        print(f"✅ JWKS encontrou chave para kid={kid}")
         # Converte a representação JSON da chave (JWK) em um objeto de chave RSA pública utilizável
         return RSAAlgorithm.from_jwk(json.dumps(jwk_key))
     except HTTPException:
@@ -354,7 +351,6 @@ async def get_current_user(request: Request) -> TokenData:
     """
     # 1. Recupera a string bruta do token do cabeçalho de autorização
     token = _extract_bearer_token(request)
-    print(f"🔍 TOKEN BRUTO RECEBIDO: {token}")
     
     # 2. Decodifica e valida a integridade criptográfica e claims estruturais (iss, aud, exp)
     payload = decode_jwt_token(token)
