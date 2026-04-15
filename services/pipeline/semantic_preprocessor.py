@@ -11,11 +11,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, Field
-
 from config import settings
-from models.models import RRWebEvent, SemanticSessionSummary
-from services.pipeline.data_processor import ProcessedSession
+from services.pipeline.models import ProcessedSession, RRWebEvent
+from services.semantic.contracts import SemanticActionRecord, SemanticExtractionContext, SemanticSessionSummary
 from services.domain.interaction_patterns import (
     build_target_descriptor,
     infer_input_kind,
@@ -24,48 +22,6 @@ from services.domain.interaction_patterns import (
     normalize_url,
     page_key_from_url,
 )
-
-
-class SemanticActionRecord(BaseModel):
-    """
-    Ação normalizada com metadados suficientes para algoritmos de compressão e detecção de heurísticas.
-    Representa uma unidade atômica de interação humana (clique, digitação, rolagem).
-    """
-
-    t: int                          # Timestamp relativo (ms) ao início da sessão
-    kind: str                        # Categoria da ação (click, input, scroll, navigation, etc)
-    target: Optional[str] = None     # Identificador único e estável do elemento alvo
-    target_group: Optional[str] = None # Grupo semântico (ex: seção de 'Checkout')
-    semantic_label: Optional[str] = None # Nome amigável extraído (ex: "Botão Finalizar")
-    page: Optional[str] = None       # Chave da página onde a ação ocorreu
-    value: Optional[str] = None      # Valor textual (para inputs)
-    checked: Optional[bool] = None   # Estado binário (para toggles/checkboxes)
-    x: Optional[int] = None          # Coordenada X na tela
-    y: Optional[int] = None          # Coordenada Y na tela
-    direction: Optional[str] = None  # Direção do movimento (ex: 'up' ou 'down' no scroll)
-    start: Optional[int] = None      # Início do bloco (usado em ações compactadas)
-    end: Optional[int] = None        # Fim do bloco (usado em ações compactadas)
-    count: int = 1                   # Contador de repetições (para compressão de rastro)
-    details: Optional[str] = None    # Descrição rica para consumo por modelos de linguagem
-    metadata: Dict[str, Any] = Field(default_factory=dict) # Dados técnicos extras
-
-
-class SemanticExtractionContext(BaseModel):
-    """
-    Estrutura intermediária que atua como um 'Data Lake' estruturado da sessão.
-    Contém todos os fatos extraídos antes da aplicação de filtros subjetivos.
-    """
-
-    session_summary: SemanticSessionSummary
-    observed_facts: Dict[str, Any] = Field(default_factory=dict)
-    semantic_actions: List[SemanticActionRecord] = Field(default_factory=list)
-    page_history: List[str] = Field(default_factory=list)
-    page_transitions: List[Dict[str, Any]] = Field(default_factory=list)
-    kinematics: List[Dict[str, int]] = Field(default_factory=list)
-    dom_map: Dict[int, str] = Field(default_factory=dict)
-    target_visit_counts: Dict[str, int] = Field(default_factory=dict)
-    group_visit_counts: Dict[str, int] = Field(default_factory=dict)
-    action_kind_counts: Dict[str, int] = Field(default_factory=dict)
 
 
 def _infer_hover_events(kinematics: List[Dict[str, int]]) -> Tuple[int, List[Dict[str, Any]]]:

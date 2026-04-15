@@ -10,22 +10,15 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-import semantic
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DBSession, select
 
-from models.models import (
-    BoundingBox,
-    InsightEvent,
-    RRWebEvent,
-    SessionAnalysis,
-    SessionProcessResponse,
-    SessionProcessStats,
-    User,
-)
+from services.core.models import SessionAnalysis, User
+from services.domain.models import BoundingBox, InsightEvent
 from services.pipeline.data_processor import SessionPreprocessor
+from services.pipeline.models import RRWebEvent, SessionProcessResponse, SessionProcessStats
 from services.pipeline.session_summarizer import build_semantic_session_bundle
+from services.semantic.semantic_engine import generate_structured_session_analysis
 from services.core.storage import storage_service
 
 logger = logging.getLogger(__name__)
@@ -241,7 +234,7 @@ async def process_session_events(
 
     processed = SessionPreprocessor.process(rrweb_events)
     semantic_bundle = build_semantic_session_bundle(rrweb_events, processed)
-    llm_output = await semantic.generate_structured_session_analysis(semantic_bundle)
+    llm_output = await generate_structured_session_analysis(semantic_bundle)
     unpacked = unpack_semantic_llm_output(llm_output)
 
     narrative = unpacked["narrative"]

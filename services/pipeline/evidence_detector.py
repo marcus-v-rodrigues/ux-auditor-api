@@ -9,23 +9,14 @@ em um envelope serializável para o restante do pipeline.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from config import settings
-from models.models import BoundingBox, InsightEvent, RRWebEvent
 from services.heuristics import BEHAVIOR_HEURISTICS, COMPRESSION_HEURISTICS, HeuristicContext
 from services.heuristics.types import HeuristicMatch
-from services.pipeline.semantic_preprocessor import SemanticActionRecord
-
-
-@dataclass
-class BehavioralEvidenceResult:
-    """Envelope da etapa de evidências no novo contrato."""
-
-    heuristic_events: List[HeuristicMatch]
-    behavioral_signals: Dict[str, Any]
-    candidate_meaningful_moments: List[HeuristicMatch]
+from services.domain.models import BoundingBox, InsightEvent
+from services.pipeline.models import RRWebEvent
+from services.semantic.contracts import BehavioralEvidenceResult, SemanticActionRecord
 
 
 def _ctx(actions: List[SemanticActionRecord], kinematics: List[Dict[str, int]], segments: List[Any]) -> HeuristicContext:

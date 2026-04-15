@@ -1,49 +1,10 @@
 import logging
-from typing import List, Dict, Optional, Any, Set
-from pydantic import BaseModel, Field
-from models.models import RRWebEvent
+from typing import Any, Dict, List, Optional, Set
+
+from services.pipeline.models import KinematicVector, ProcessedSession, RRWebEvent, UserAction
 
 # Configuração de Logs para monitoramento do processamento de traços de eventos
 logger = logging.getLogger("ux_auditor")
-
-# --- Modelagem de Dados (Buckets) ---
-
-class KinematicVector(BaseModel):
-    """
-    Bucket otimizado para análise cinemática heurística.
-    Focado exclusivamente em geometria e tempo para detecção de anomalias comportamentais.
-    """
-    # Timestamp relativo permite que a heurística ignore a data absoluta e foque no padrão do rastro
-    timestamp: int = Field(..., description="Delta em ms relativo ao início da sessão")
-    # Coordenadas X e Y normalizadas capturadas da interação do cursor
-    x: int
-    y: int
-
-class UserAction(BaseModel):
-    """
-    Bucket Otimizado para LLM (Geração de Narrativa e Análise Semântica).
-    Focado em intenção do usuário e contexto da interface.
-    """
-    timestamp: int
-    # Categorização de alto nível para facilitar a interpretação pelo modelo de linguagem
-    action_type: str = Field(..., description="'click' | 'input' | 'navigation' | 'resize' | 'scroll'")
-    # ID do nó no DOM para permitir correlação rápida com o mapa de elementos
-    target_id: Optional[int] = None
-    # Detalhes enriquecidos que descrevem o que o usuário interagiu (HTML, URL, valores)
-    details: Optional[str] = Field(None, description="Contexto rico: HTML simplificado, URL, ou valor input")
-
-class ProcessedSession(BaseModel):
-    """
-    Container final agnóstico que organiza a sessão em fluxos de dados distintos para diferentes motores de análise.
-    """
-    initial_timestamp: int
-    total_duration: int
-    # Fluxo de dados geométricos para o motor de heurísticas
-    kinematics: List[KinematicVector] = Field(default_factory=list)
-    # Fluxo de eventos semânticos para o motor de LLM/Heurísticas
-    actions: List[UserAction] = Field(default_factory=list)
-    # Dicionário de busca rápida O(1) para traduzir IDs numéricos do rrweb em HTML descritivo
-    dom_map: Dict[int, str] = Field(default_factory=dict, description="Lookup O(1) de ID -> HTML Simplificado")
 
 # --- Lógica de Processamento (O(N) - Single Pass) ---
 

@@ -8,18 +8,9 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
 from config import settings
-from models.models import TaskSegment
 from services.heuristics import SEGMENTATION_HEURISTICS, HeuristicContext
-from services.pipeline.semantic_preprocessor import SemanticActionRecord
-
-
-class TaskSegmentationResult(BaseModel):
-    """Encapsula a lista de segmentos gerados e um sumário estatístico do fatiamento da sessão."""
-    task_segments: List[TaskSegment] = Field(default_factory=list)
-    segment_summary: Dict[str, Any] = Field(default_factory=dict)
+from services.semantic.contracts import SemanticActionRecord, TaskSegment, TaskSegmentationResult
 
 
 def _dominant_key(records: List[SemanticActionRecord], attr: str) -> Optional[str]:

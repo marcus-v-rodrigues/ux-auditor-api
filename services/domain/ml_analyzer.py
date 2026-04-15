@@ -1,8 +1,8 @@
 import numpy as np
 from typing import List
 from sklearn.ensemble import IsolationForest
-from models.models import InsightEvent, BoundingBox
-from services.pipeline.data_processor import KinematicVector
+from services.domain.models import BoundingBox, InsightEvent
+from services.pipeline.models import KinematicVector
 
 def detect_behavioral_anomalies(kinematics: List[KinematicVector]) -> List[InsightEvent]:
     """

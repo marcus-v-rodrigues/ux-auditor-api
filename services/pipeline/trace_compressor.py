@@ -11,21 +11,11 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
 from config import settings
-from models.models import CompactAction
 from services.heuristics import COMPRESSION_HEURISTICS, HeuristicContext
 from services.heuristics.base import make_match
 from services.heuristics.types import HeuristicMatch
-from services.pipeline.semantic_preprocessor import SemanticActionRecord
-
-
-class TraceCompressionResult(BaseModel):
-    """Container para o traço compactado e estatísticas de padrões detectados."""
-    action_trace_compact: List[CompactAction] = Field(default_factory=list)
-    dominant_patterns: List[Dict[str, Any]] = Field(default_factory=list)
-    candidate_meaningful_moments: List[HeuristicMatch] = Field(default_factory=list)
+from services.semantic.contracts import CompactAction, SemanticActionRecord, TraceCompressionResult
 
 
 def _window_kinematic_bursts(kinematics: List[Dict[str, int]]) -> List[CompactAction]:

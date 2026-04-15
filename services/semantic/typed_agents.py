@@ -5,7 +5,8 @@ Este módulo encapsula a camada LLM com duas implementações:
 1. PydanticAI como orquestrador principal dos agentes.
 2. Instructor como validador/runner alternativo com schema enforcement.
 
-Ambos usam o mesmo contrato Pydantic definido em `models.models`.
+Ambos usam o mesmo contrato Pydantic definido nas camadas `services.semantic.models`
+e `services.semantic.contracts`.
 """
 
 from __future__ import annotations
@@ -15,13 +16,9 @@ from functools import lru_cache
 import json
 from typing import Any, Dict, Optional
 
-from models.models import (
-    PageContextInference,
-    SemanticElementDictionary,
-    SemanticSessionBundle,
-    StructuredSessionAnalysis,
-)
-from semantic import prompts
+from . import prompts
+from .contracts import SemanticSessionBundle
+from .models import PageContextInference, SemanticElementDictionary, StructuredSessionAnalysis
 
 try:  # pragma: no cover - optional dependency
     from pydantic_ai import Agent, ModelSettings

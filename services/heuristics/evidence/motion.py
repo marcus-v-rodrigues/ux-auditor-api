@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import List
 
-from services.pipeline.data_processor import KinematicVector
+from services.pipeline.models import KinematicVector
 from services.heuristics.base import make_match
 from services.heuristics.shared.motion_patterns import detect_erratic_motion_windows, detect_visual_search_bursts
 from services.heuristics.types import HeuristicContext, HeuristicMatch
-from services.domain.ml_analyzer import detect_behavioral_anomalies
 
 
 def detect_visual_search_burst(ctx: HeuristicContext) -> List[HeuristicMatch]:
@@ -44,6 +43,8 @@ def detect_erratic_motion(ctx: HeuristicContext) -> List[HeuristicMatch]:
 
 
 def detect_ml_erratic_motion(ctx: HeuristicContext) -> List[HeuristicMatch]:
+    from services.domain.ml_analyzer import detect_behavioral_anomalies
+
     kinematics = [
         KinematicVector(
             timestamp=int(item["timestamp"]),

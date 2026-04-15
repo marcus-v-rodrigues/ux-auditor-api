@@ -83,7 +83,7 @@ def create_db_and_tables():
     """
     # Importa os modelos para garantir que eles sejam registrados
     # no metadata do SQLModel antes de criar as tabelas
-    from models.models import User, SessionAnalysis  # noqa: F401
+    from services.core.models import User, SessionAnalysis  # noqa: F401
     
     SQLModel.metadata.create_all(engine)
     print("✓ Tabelas do banco de dados criadas/verificadas")

@@ -10,15 +10,16 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Sequence, Tuple
 
-from models.models import (
+from services.semantic.contracts import (
+    BehavioralEvidenceResult,
     CatalogedEvidence,
     PageArtifacts,
+    SemanticActionRecord,
     SemanticElementCandidate,
+    SemanticExtractionContext,
+    TaskSegmentationResult,
+    TraceCompressionResult,
 )
-from services.pipeline.semantic_preprocessor import SemanticActionRecord, SemanticExtractionContext
-from services.pipeline.task_segmenter import TaskSegmentationResult
-from services.pipeline.trace_compressor import TraceCompressionResult
-from services.pipeline.evidence_detector import BehavioralEvidenceResult
 
 
 def _top_items(counter: Dict[str, int], limit: int = 10) -> List[Dict[str, Any]]:

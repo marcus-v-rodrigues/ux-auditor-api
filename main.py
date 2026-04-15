@@ -13,17 +13,9 @@ import requests
 from config import settings
 
 # Importação dos Modelos
-from models import (
-    SessionProcessStats,
-    SessionProcessResponse,
-    SessionJobSubmissionResponse,
-    SessionJobStatusResponse,
-    RegisterRequest,
-    RegisterResponse,
-)
-from models.models import User, SessionAnalysis
-# Importação do Módulo de Autenticação
-from services import get_current_user, TokenData
+from services.core.auth import get_current_user, TokenData
+from services.core.models import RegisterRequest, RegisterResponse, SessionAnalysis, User
+from services.pipeline.models import SessionJobStatusResponse, SessionJobSubmissionResponse, SessionProcessResponse, SessionProcessStats
 # Importação do Banco de Dados (SQLModel)
 from database import get_session, init_db
 from sqlmodel import Session as DBSession, select

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
-from models.models import (
+from .contracts import SemanticSessionBundle
+from .models import (
     LLMAnalysisResult,
     PageContextInference,
     SemanticElementDictionary,
     SemanticElementProfile,
-    SemanticSessionBundle,
     StructuredSessionAnalysis,
 )
-from semantic.typed_agents import (
+from .typed_agents import (
     AgentRunResult,
     run_element_dictionary_agent,
     run_final_synthesis_agent,
@@ -260,7 +260,6 @@ async def generate_structured_session_analysis(bundle: Union[SemanticSessionBund
                 "backend": element_result.backend,
                 "status": "ok",
                 "confidence": element_dictionary.confidence,
-                "elements": len(element_dictionary.elements),
             }
         )
     except Exception as exc:
@@ -280,33 +279,35 @@ async def generate_structured_session_analysis(bundle: Union[SemanticSessionBund
         final_analysis = await _stage_result(final_result, StructuredSessionAnalysis)
         pipeline_trace["stages"].append(
             {
-                "name": "structured_analysis",
+                "name": "final_synthesis",
                 "backend": final_result.backend,
                 "status": "ok",
                 "confidence": final_analysis.overall_confidence,
             }
         )
-        result = LLMAnalysisResult(
+        return LLMAnalysisResult(
             status="ok",
             structured_analysis=final_analysis,
             human_readable_summary=generate_human_readable_narrative(final_analysis),
-            structured_fallback=None,
+            structured_fallback=bundle.model_dump(mode="json"),
             error=None,
             page_context=page_context,
             element_dictionary=bundle.element_dictionary,
             evidence_catalog=bundle.evidence_catalog,
             pipeline_trace=pipeline_trace,
-        )
-        return result.model_dump(mode="json")
+        ).model_dump(mode="json")
     except Exception as exc:
-        fallback = _fallback_structured_analysis(bundle, str(exc))
-        fallback.pipeline_trace = pipeline_trace
         pipeline_trace["stages"].append(
             {
-                "name": "structured_analysis",
+                "name": "final_synthesis",
                 "backend": "deterministic",
                 "status": "fallback",
                 "error": str(exc),
             }
         )
+        fallback = _fallback_structured_analysis(bundle, str(exc))
+        fallback.pipeline_trace = pipeline_trace
+        fallback.page_context = page_context
+        fallback.element_dictionary = bundle.element_dictionary
+        fallback.evidence_catalog = bundle.evidence_catalog
         return fallback.model_dump(mode="json")

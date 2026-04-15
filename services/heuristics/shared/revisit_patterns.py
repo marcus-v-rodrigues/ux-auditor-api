@@ -13,6 +13,7 @@ from services.heuristics.base import (
     action_page,
     action_target,
     action_timestamp,
+    get_config,
     ordered_actions,
     unique_preserve,
 )
