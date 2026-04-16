@@ -153,7 +153,7 @@ As mensagens enviadas para a fila `raw_sessions` devem seguir este formato JSON:
 O worker gera logs em dois locais:
 
 1. **Console** (stdout) - para visualização em tempo real
-2. **Arquivo** `worker_io.log` - para persistência
+2. **Arquivo** `logs/worker.log` - para persistência
 
 Níveis de log:
 - `INFO`: Operações normais (conexão, upload, etc.)
@@ -163,16 +163,16 @@ Níveis de log:
 ### Exemplo de Logs
 
 ```
-2024-01-01 12:00:00 - INFO - Conectando ao RabbitMQ: amqp://guest:guest@localhost:5672/
-2024-01-01 12:00:01 - INFO - Conexão RabbitMQ estabelecida com sucesso.
-2024-01-01 12:00:01 - INFO - Configurando canal e fila...
-2024-01-01 12:00:01 - INFO - Fila 'raw_sessions' configurada com sucesso.
-2024-01-01 12:00:01 - INFO - Iniciando consumo da fila 'raw_sessions'...
-2024-01-01 12:00:05 - INFO - Mensagem recebida | Delivery Tag: 1 | Message ID: msg_123
-2024-01-01 12:00:05 - INFO - Processando sessão: user_id=user_123, session_uuid=550e8400-e29b-41d4-a716-446655440000
-2024-01-01 12:00:05 - INFO - Iniciando upload para Garage: sessions/user_123/550e8400-e29b-41d4-a716-446655440000.json (2048 bytes)
-2024-01-01 12:00:06 - INFO - Upload concluído com sucesso: sessions/user_123/550e8400-e29b-41d4-a716-446655440000.json
-2024-01-01 12:00:06 - INFO - Processamento concluído com sucesso | Delivery Tag: 1
+2024-01-01 12:00:00 | INFO | ux-worker | Conectando ao RabbitMQ: amqp://guest:guest@localhost:5672/
+2024-01-01 12:00:01 | INFO | ux-worker | Conexão RabbitMQ estabelecida com sucesso.
+2024-01-01 12:00:01 | INFO | ux-worker | Configurando canal e fila...
+2024-01-01 12:00:01 | INFO | ux-worker | Fila 'raw_sessions' configurada com sucesso.
+2024-01-01 12:00:01 | INFO | ux-worker | Iniciando consumo da fila 'raw_sessions'...
+2024-01-01 12:00:05 | INFO | ux-worker | Mensagem recebida | Delivery Tag: 1 | Message ID: msg_123
+2024-01-01 12:00:05 | INFO | ux-worker | Processando sessão: user_id=user_123, session_uuid=550e8400-e29b-41d4-a716-446655440000
+2024-01-01 12:00:05 | INFO | ux-worker | Iniciando upload para Garage: sessions/user_123/550e8400-e29b-41d4-a716-446655440000.json (2048 bytes)
+2024-01-01 12:00:06 | INFO | ux-worker | Upload concluído com sucesso: sessions/user_123/550e8400-e29b-41d4-a716-446655440000.json
+2024-01-01 12:00:06 | INFO | ux-worker | Processamento concluído com sucesso | Delivery Tag: 1
 ```
 
 ## Troubleshooting
@@ -289,7 +289,7 @@ docker-compose up -d worker-io
 
 ```bash
 # Limpar arquivo de log
-> worker_io.log
+> logs/worker.log
 
 # Ou configurar logrotate para rotação automática
 ```

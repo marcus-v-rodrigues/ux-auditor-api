@@ -1,5 +1,4 @@
 import uvicorn
-import logging
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
@@ -11,6 +10,7 @@ import requests
 
 # Importação da Configuração
 from config import settings
+from utils.logging_config import configure_logging
 
 # Importação dos Modelos
 from services.core.auth import get_current_user, TokenData
@@ -27,7 +27,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-logger = logging.getLogger(__name__)
+logger = configure_logging("ux-auditor-api", "api.log")
 
 # Configuração Global de CORS
 # Permite integração com frontends Next.js e extensões de navegador
@@ -152,16 +152,16 @@ async def startup_event():
     """
     try:
         await rabbitmq.get_channel()
-        print(f"✓ Conectado ao RabbitMQ em {settings.RABBITMQ_URL}")
+        logger.info("Conectado ao RabbitMQ em %s", settings.RABBITMQ_URL)
     except Exception as e:
-        print(f"✗ Falha ao conectar ao RabbitMQ: {e}")
+        logger.exception("Falha ao conectar ao RabbitMQ: %s", e)
     
     try:
         # Inicializa o banco de dados SQLModel
         init_db()
-        print("✓ Conectado ao banco de dados PostgreSQL via SQLModel")
+        logger.info("Conectado ao banco de dados PostgreSQL via SQLModel")
     except Exception as e:
-        print(f"✗ Falha ao conectar ao banco de dados: {e}")
+        logger.exception("Falha ao conectar ao banco de dados: %s", e)
 
 
 @app.on_event("shutdown")
@@ -170,7 +170,7 @@ async def shutdown_event():
     Fecha conexão RabbitMQ ao encerrar a aplicação.
     """
     await rabbitmq.close()
-    print("✓ Conexão RabbitMQ fechada")
+    logger.info("Conexão RabbitMQ fechada")
 
 @app.get("/health")
 async def health_check():
@@ -246,8 +246,8 @@ async def register_user(
     }
     
     try:
-        print(f"🔗 Sending registration request to Janus: {janus_url}")
-        print(f"   ClientID: {settings.JANUS_CLIENT_ID}")
+        logger.info("Sending registration request to Janus: %s", janus_url)
+        logger.info("ClientID: %s", settings.JANUS_CLIENT_ID)
         janus_response = requests.post(
             janus_url,
             json=janus_payload,
@@ -261,7 +261,11 @@ async def register_user(
         # Verifica se a requisição foi bem-sucedida (201 Created ou 200 OK)
         if janus_status_code not in [200, 201]:
             error_detail = janus_response.text
-            print(f"✗ Janus registration failed with status {janus_status_code}: {error_detail}")
+            logger.error(
+                "Janus registration failed with status %s: %s",
+                janus_status_code,
+                error_detail,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to register user in Janus: {error_detail}"
@@ -269,10 +273,10 @@ async def register_user(
         
         # Determina se é um novo usuário ou um vínculo de usuário existente
         if janus_status_code == 201:
-            print(f"✓ New user created in Janus (201 Created)")
+            logger.info("New user created in Janus (201 Created)")
             should_rollback_janus = True  # Novo usuário pode ser deletado em caso de falha
         else:  # status 200
-            print(f"✓ Existing user linked to client in Janus (200 OK)")
+            logger.info("Existing user linked to client in Janus (200 OK)")
             should_rollback_janus = False  # Usuário existente NÃO deve ser deletado
         
         # Passo B: Extrai o 'id' (UUID) retornado pelo Janus
@@ -280,16 +284,16 @@ async def register_user(
         user_id = janus_data.get("id")
         
         if not user_id:
-            print(f"✗ Janus response missing 'id' field: {janus_data}")
+            logger.error("Janus response missing 'id' field: %s", janus_data)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Janus response missing user ID"
             )
         
-        print(f"✓ User {'created' if janus_status_code == 201 else 'linked'} in Janus with ID: {user_id}")
+        logger.info("User %s in Janus with ID: %s", "created" if janus_status_code == 201 else "linked", user_id)
         
     except requests.RequestException as e:
-        print(f"✗ Failed to connect to Janus service: {str(e)}")
+        logger.exception("Failed to connect to Janus service: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to connect to Janus service: {str(e)}"
@@ -299,7 +303,7 @@ async def register_user(
     try:
         existing_user = session.get(User, user_id)
         if existing_user:
-            print(f"✓ User already exists in local database: {user_id}")
+            logger.info("User already exists in local database: %s", user_id)
             # Usuário já existe localmente, retorna sucesso (idempotência)
             return RegisterResponse(
                 id=user_id,
@@ -308,12 +312,12 @@ async def register_user(
                 message="User already registered and synchronized"
             )
     except Exception as e:
-        print(f"⚠️ Error checking local user existence: {str(e)}")
+        logger.warning("Error checking local user existence: %s", e)
         # Continua para tentar criar o usuário
     
     # Passo D: Cria o usuário no banco local do UX Auditor usando o mesmo ID
     try:
-        print(f"💾 Creating user in local database with ID: {user_id}")
+        logger.info("Creating user in local database with ID: %s", user_id)
         
         # Cria novo usuário
         new_user = User(
@@ -323,17 +327,17 @@ async def register_user(
         )
         session.add(new_user)
         session.commit()
-        print(f"✓ User created in local database: {user_id}")
+        logger.info("User created in local database: %s", user_id)
         
     except Exception as e:
         # Passo E: Rollback seletivo no Janus
-        print(f"✗ CRITICAL: Failed to create user in local database: {str(e)}")
-        print(f"⚠️  Desynchronization detected! User exists in Janus but not in UX Auditor")
+        logger.exception("CRITICAL: Failed to create user in local database: %s", e)
+        logger.warning("Desynchronization detected! User exists in Janus but not in UX Auditor")
         
         # Só executa rollback se foi um novo usuário criado (201)
         # Se foi 200 (usuário existente vinculado), NÃO deleta para não afetar outros sistemas
         if should_rollback_janus:
-            print(f"🔄 Attempting rollback in Janus (user was newly created)...")
+            logger.info("Attempting rollback in Janus (user was newly created)...")
             try:
                 delete_url = f"{settings.JANUS_API_URL}/api/users/{user_id}"
                 delete_headers = {
@@ -345,14 +349,14 @@ async def register_user(
                     timeout=10
                 )
                 if delete_response.status_code in [200, 204]:
-                    print(f"✓ Rolled back user creation in Janus: {user_id}")
+                    logger.info("Rolled back user creation in Janus: %s", user_id)
                 else:
-                    print(f"⚠️  Failed to rollback user in Janus: {delete_response.status_code}")
+                    logger.warning("Failed to rollback user in Janus: %s", delete_response.status_code)
             except Exception as rollback_error:
-                print(f"⚠️  Failed to rollback user in Janus: {str(rollback_error)}")
+                logger.warning("Failed to rollback user in Janus: %s", rollback_error)
         else:
-            print(f"⚠️  Skipping rollback in Janus (user was linked, not created)")
-            print(f"⚠️  User {user_id} remains in Janus as it may be used by other systems")
+            logger.warning("Skipping rollback in Janus (user was linked, not created)")
+            logger.warning("User %s remains in Janus as it may be used by other systems", user_id)
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -412,7 +416,7 @@ async def ingest_session(
         "timestamp": datetime.utcnow().isoformat(),
     }
 
-    print(message_payload)
+    logger.info("Queued session ingest payload: %s", message_payload)
 
     try:
         await publish_job_message(message_payload)
@@ -460,7 +464,6 @@ async def get_session_status(
             result=None,
         )
         logger.info("Sessão ainda sem análise persistida | response=%s", response.model_dump())
-        print(response.model_dump(), flush=True)
         return response
 
     result = None
@@ -480,9 +483,8 @@ async def get_session_status(
         analysis.processing_status,
         response.model_dump(),
     )
-    print(response.model_dump(), flush=True)
     return response
 
 if __name__ == "__main__":
     # Execução do servidor via Uvicorn usando configurações do config.py
-    uvicorn.run(app, host=settings.APP_HOST, port=settings.APP_PORT)
+    uvicorn.run(app, host=settings.APP_HOST, port=settings.APP_PORT, log_config=None)

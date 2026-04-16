@@ -85,9 +85,3 @@ def segment_canonical_session(interactions: List[CanonicalInteraction], idle_gap
 
     flush("end")
     return segments
-
-
-def segment_session(interactions: List[CanonicalInteraction], idle_gap_ms: int = 3000) -> List[SessionSegment]:
-    """Compatibilidade com o nome usado pelo orquestrador do pipeline."""
-
-    return segment_canonical_session(interactions, idle_gap_ms=idle_gap_ms)

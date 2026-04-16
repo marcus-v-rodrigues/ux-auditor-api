@@ -5,6 +5,7 @@ Suporta algoritmo RS256 (assimétrico) com JWKS dinâmico.
 """
 from typing import Optional, Dict, Any
 from datetime import datetime
+import logging
 import time
 import jwt
 import json
@@ -12,6 +13,8 @@ import requests
 from jwt.algorithms import RSAAlgorithm
 from fastapi import HTTPException, Request, status
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class TokenData:
@@ -81,7 +84,7 @@ def _get_cached_jwks() -> Dict[str, Any]:
 
     try:
         # Realiza a busca síncrona das chaves públicas no IDP
-        print(f"🔑 Buscando JWKS em: {settings.AUTH_JWKS_URL}")
+        logger.info("Buscando JWKS em: %s", settings.AUTH_JWKS_URL)
         response = requests.get(settings.AUTH_JWKS_URL, timeout=5)
         response.raise_for_status()
         jwks = response.json()
@@ -127,7 +130,7 @@ def get_jwks_public_key(token: str) -> Any:
         
         # O Janus IDP deve fornecer o 'kid' para permitir a rotação de chaves
         if not kid:
-            print("❌ ERRO JWT: Token não contém 'kid' no header")
+            logger.warning("Token não contém 'kid' no header")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token não contém 'kid' no header",
@@ -136,7 +139,7 @@ def get_jwks_public_key(token: str) -> Any:
         
         # Garante que o token está usando o algoritmo assimétrico RS256 configurado
         if alg and alg != settings.JWT_ALGORITHM:
-            print(f"❌ ERRO JWT: Algoritmo do token inválido: {alg}")
+            logger.warning("Algoritmo do token inválido: %s", alg)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Algoritmo do token inválido: {alg}",
@@ -145,7 +148,7 @@ def get_jwks_public_key(token: str) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ ERRO JWT ao ler header: {e}")
+        logger.exception("ERRO JWT ao ler header: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Falha ao ler header do token: {str(e)}",
@@ -242,35 +245,35 @@ def decode_jwt_token(token: str) -> Dict[str, Any]:
 
     # Tratamentos específicos para erros de JWT para fornecer feedback claro ao cliente (401)
     except jwt.ExpiredSignatureError:
-        print("❌ ERRO JWT: Token expirado prematuramente (Problema de relógio/sync?)")
+        logger.warning("Token expirado prematuramente")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidSignatureError:
-        print("❌ ERRO JWT: Assinatura do token inválida (Chave pública não bate)")
+        logger.warning("Assinatura do token inválida")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Assinatura do token inválida",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidIssuerError:
-        print("❌ ERRO JWT: Emissor do token inválido")
+        logger.warning("Emissor do token inválido")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Emissor do token inválido. Esperado: {settings.AUTH_ISSUER_URL}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidTokenError as e:
-        print(f"❌ ERRO JWT (Token ou Algoritmo Inválido): {e}")
+        logger.warning("ERRO JWT (Token ou Algoritmo Inválido): %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token inválido: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
     except Exception as e:
-        print(f"❌ ERRO JWT Exceção Geral: {e}")
+        logger.exception("ERRO JWT Exceção Geral: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Falha na validação do token: {str(e)}",

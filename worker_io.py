@@ -12,7 +12,6 @@ as mensagens sejam processadas mesmo em caso de falhas temporárias.
 
 import asyncio
 import json
-import logging
 import signal
 import sys
 from typing import Optional, Dict, Any, List
@@ -25,17 +24,9 @@ from sqlmodel import Session as DBSession
 from config import settings
 from database import engine, init_db
 from services.session_processing.session_job_processor import mark_analysis_status, process_session_events
+from utils.logging_config import configure_logging
 
-# Configuração de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('worker_io.log')
-    ]
-)
-logger = logging.getLogger(__name__)
+logger = configure_logging("ux-worker", "worker.log")
 
 
 class MinIOStorageClient:

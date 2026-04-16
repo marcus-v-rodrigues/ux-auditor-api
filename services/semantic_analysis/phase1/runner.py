@@ -287,6 +287,6 @@ async def run_phase1_extraction_plan(processed: ProcessedSession) -> tuple[Phase
     payload_json = json.dumps(payload, ensure_ascii=False)
     try:
         plan = await request_phase1_plan(payload_json)
-        return plan, {"backend": "openai_json_schema", "status": "ok"}
+        return plan, {"backend": "structured_llm", "status": "ok"}
     except Exception as exc:
         return _fallback_phase1_plan(processed), {"backend": "deterministic_fallback", "status": "fallback", "error": str(exc)}

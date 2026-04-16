@@ -16,8 +16,9 @@ from services.semantic_analysis.phase2.runner import AnalysisResult, generate_fi
 from services.semantic_analysis.heuristic_analysis import detect_heuristics
 from services.semantic_analysis.phase1.runner import run_phase1_extraction_plan
 from services.semantic_analysis.plan_executor import execute_phase1_plan
-from services.semantic_analysis.segmentation import segment_session
+from services.semantic_analysis.segmentation import segment_canonical_session
 from services.semantic_analysis.semantic_bundle import SemanticSessionBundle, build_semantic_bundle
+from utils.utils import log_snapshot
 
 
 async def run_semantic_pipeline(
@@ -32,15 +33,24 @@ async def run_semantic_pipeline(
     """
 
     processed_session = processed or SessionPreprocessor.process(events)
+    log_snapshot("processed_session", processed_session)
+
     phase1_plan, phase1_trace = await run_phase1_extraction_plan(processed_session)
+    log_snapshot("phase1_plan", phase1_plan)
+
     execution = execute_phase1_plan(phase1_plan, processed_session)
+    log_snapshot("execution_phase1", execution)
+
     heuristic_matches = detect_heuristics(
         phase1_plan,
         execution.canonical_interactions,
         processed_session,
         settings.model_dump(),
     )
-    segments = segment_session(execution.canonical_interactions)
+
+    segments = segment_canonical_session(execution.canonical_interactions)
+    log_snapshot("segments", segments)
+
     bundle = build_semantic_bundle(
         phase1_plan,
         execution.resolved_elements,
@@ -54,4 +64,8 @@ async def run_semantic_pipeline(
     )
     analysis = await generate_final_session_analysis(bundle)
     bundle.pipeline_trace["final_analysis"] = analysis.pipeline_trace
+
+    log_snapshot("bundle", bundle)
+    log_snapshot("analysis", analysis)
+
     return bundle, analysis
