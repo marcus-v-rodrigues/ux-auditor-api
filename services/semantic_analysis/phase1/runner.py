@@ -1,9 +1,9 @@
 """Orquestração da fase 1.
 
 Este runner prepara um payload compacto para o agente estrutural e aplica uma
-fallback determinística quando o backend LLM não está disponível. A fallback
-existe apenas para manter o pipeline operacional; a arquitetura continua
-centrada no contrato `Phase1ExtractionPlan`.
+fallback determinística quando o backend LLM falha. A fallback existe apenas
+para manter o pipeline operacional; a arquitetura continua centrada no
+contrato ``Phase1ExtractionPlan``.
 """
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ def _fallback_phase1_plan(processed: ProcessedSession) -> Phase1ExtractionPlan:
         usability_assessment=UsabilityAssessmentPlan(
             nielsen_heuristics=usability_scores,
             notes=[
-                "Fallback determinística usada porque o backend Instructor da fase 1 não estava disponível.",
+                "Fallback determinística usada porque o backend estruturado da fase 1 não estava disponível.",
                 "O plano foi inferido a partir de padrões de DOM simplificado e não de interpretação comportamental.",
             ],
         ),
@@ -287,6 +287,6 @@ async def run_phase1_extraction_plan(processed: ProcessedSession) -> tuple[Phase
     payload_json = json.dumps(payload, ensure_ascii=False)
     try:
         plan = await request_phase1_plan(payload_json)
-        return plan, {"backend": "instructor", "status": "ok"}
+        return plan, {"backend": "openai_json_schema", "status": "ok"}
     except Exception as exc:
         return _fallback_phase1_plan(processed), {"backend": "deterministic_fallback", "status": "fallback", "error": str(exc)}

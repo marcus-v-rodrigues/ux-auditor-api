@@ -110,7 +110,7 @@ async def generate_final_session_analysis(bundle: SemanticSessionBundle) -> Anal
             status="ok",
             structured_analysis=response,
             human_readable_summary=response.session_narrative,
-            pipeline_trace={"backend": "instructor"},
+            pipeline_trace={"backend": "openai_json_schema"},
         )
     except Exception as exc:
         return _fallback_final_analysis(bundle, str(exc))

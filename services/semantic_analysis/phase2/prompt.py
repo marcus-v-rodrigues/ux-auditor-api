@@ -17,4 +17,6 @@ Regras obrigatórias:
 3. Diferencie observação de hipótese.
 4. Cite evidence_used e supporting_evidence com referências do bundle.
 5. Se a evidência for insuficiente, declare ambiguidades em vez de forçar conclusão.
+6. Responda apenas com JSON puro, sem markdown, sem comentários e sem texto extra.
+7. O objeto final deve ser estritamente compatível com StructuredSessionAnalysis.
 """

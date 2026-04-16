@@ -18,6 +18,7 @@ Regras obrigatórias:
 2. Não reconstrua a sessão inteira nem faça parsing fino do rrweb.
 3. Defina a unidade semântica correta da interface e como o executor deve resolver labels e consolidar eventos.
 4. Se houver radio groups, checkbox groups, selects, text inputs ou botões críticos, descreva-os no plano.
-5. Responda apenas com um objeto compatível com o modelo Phase1ExtractionPlan.
-6. Use confidence e notes para explicitar incerteza, nunca para improvisar sem evidência.
+5. Responda apenas com JSON puro, sem markdown, sem comentários e sem texto extra.
+6. O objeto final deve ser estritamente compatível com o modelo Phase1ExtractionPlan.
+7. Use confidence e notes para explicitar incerteza, nunca para improvisar sem evidência.
 """
