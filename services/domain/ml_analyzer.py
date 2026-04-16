@@ -1,10 +1,9 @@
 import numpy as np
-from typing import List
+from typing import Any, List
 from sklearn.ensemble import IsolationForest
 from services.domain.models import BoundingBox, InsightEvent
-from services.pipeline.models import KinematicVector
 
-def detect_behavioral_anomalies(kinematics: List[KinematicVector]) -> List[InsightEvent]:
+def detect_behavioral_anomalies(kinematics: List[Any]) -> List[InsightEvent]:
     """
     Implementa a detecção de anomalias comportamentais usando Aprendizado Não Supervisionado (Isolation Forest).
     

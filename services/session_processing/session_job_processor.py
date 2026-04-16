@@ -15,10 +15,9 @@ from sqlmodel import Session as DBSession, select
 
 from services.core.models import SessionAnalysis, User
 from services.domain.models import BoundingBox, InsightEvent
-from services.pipeline.data_processor import SessionPreprocessor
-from services.pipeline.models import RRWebEvent, SessionProcessResponse, SessionProcessStats
-from services.pipeline.session_summarizer import build_semantic_session_bundle
-from services.semantic.semantic_engine import generate_structured_session_analysis
+from services.session_processing.data_processor import SessionPreprocessor
+from services.session_processing.models import RRWebEvent, SessionProcessResponse, SessionProcessStats
+from services.semantic_analysis.pipeline import run_semantic_pipeline
 from services.core.storage import storage_service
 
 logger = logging.getLogger(__name__)
@@ -233,8 +232,8 @@ async def process_session_events(
     rrweb_events = _normalize_rrweb_events(raw_events)
 
     processed = SessionPreprocessor.process(rrweb_events)
-    semantic_bundle = build_semantic_session_bundle(rrweb_events, processed)
-    llm_output = await generate_structured_session_analysis(semantic_bundle)
+    semantic_bundle, analysis_result = await run_semantic_pipeline(rrweb_events, processed)
+    llm_output = analysis_result.model_dump(mode="json")
     unpacked = unpack_semantic_llm_output(llm_output)
 
     narrative = unpacked["narrative"]
@@ -242,11 +241,18 @@ async def process_session_events(
     intent_analysis = unpacked["intent_analysis"]
     structured_analysis = unpacked["structured_analysis"]
 
-    erratic_matches = [item for item in semantic_bundle.heuristic_events if item.heuristic_name == "ml_erratic_motion"]
-    # O sinal de rage click agora é derivado do bundle semântico, não de um atalho legado.
-    rage_matches = [item for item in semantic_bundle.heuristic_events if item.heuristic_name == "rage_click"]
+    heuristic_matches = list(semantic_bundle.heuristic_matches)
+    erratic_matches = [item for item in heuristic_matches if item.heuristic_name == "ml_erratic_motion"]
+    rage_matches = [item for item in heuristic_matches if item.heuristic_name == "rage_click"]
     insights_rage = len(rage_matches)
-    all_insights = [_match_to_insight_event(item) for item in erratic_matches + rage_matches]
+    surfaced_matches = [item for item in heuristic_matches if item.heuristic_name in {
+        "local_hesitation",
+        "real_response_change",
+        "session_fragmentation",
+        "task_progression",
+        "region_alternation",
+    }]
+    all_insights = [_match_to_insight_event(item) for item in surfaced_matches]
 
     stats = SessionProcessStats(
         total_events=len(rrweb_events),

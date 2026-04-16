@@ -13,12 +13,20 @@ from typing import Any, Dict, List, Optional
 
 @dataclass(frozen=True)
 class HeuristicContext:
-    """Contexto imutável compartilhado entre detectores."""
+    """Contexto imutável compartilhado entre detectores comportamentais.
+
+    A arquitetura nova trabalha principalmente sobre interações canônicas, mas
+    algumas heurísticas comportamentais legítimas ainda precisam olhar para
+    sinais técnicos locais, como clusters de clique e trajetória do cursor.
+    Por isso o contexto aceita tanto `actions` consolidadas quanto `raw_actions`
+    e `kinematics`.
+    """
 
     actions: List[Any]
     kinematics: List[Any]
     dom_map: Dict[str, Any]
     page_context: Optional[Dict[str, Any]]
+    raw_actions: List[Any] = field(default_factory=list)
     config: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -33,4 +41,3 @@ class HeuristicMatch:
     end_ts: Optional[int]
     target_ref: Optional[str]
     evidence: Dict[str, Any] = field(default_factory=dict)
-

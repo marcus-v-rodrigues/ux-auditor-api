@@ -1,7 +1,8 @@
 import logging
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set
 
-from services.pipeline.models import KinematicVector, ProcessedSession, RRWebEvent, UserAction
+from services.session_processing.models import FlatDOMNode, KinematicVector, PageMetadata, ProcessedSession, RRWebEvent, RawAction, UserAction
 from services.domain.interaction_patterns import normalize_text
 
 # Configuração de Logs para monitoramento do processamento de traços de eventos
@@ -10,6 +11,16 @@ logger = logging.getLogger("ux_auditor")
 # --- Lógica de Processamento (O(N) - Single Pass) ---
 
 class SessionPreprocessor:
+    """
+    Pré-processamento neutro e barato do rrweb.
+
+    A responsabilidade desta classe é preparar o material estrutural que será
+    consumido pela fase 1 e pelo executor determinístico. Ela deliberadamente
+    não tenta fechar semântica de formulário, não executa heurísticas UX e não
+    comprime o rastro em unidades finais de interação, porque essas decisões
+    agora dependem do plano estrutural gerado depois.
+    """
+
     # Tags que devem ser ignoradas para economizar tokens do LLM e remover ruído estrutural (scripts, CSS)
     IGNORED_TAGS: Set[str] = {'script', 'style', 'link', 'meta', 'noscript'}
     
@@ -19,18 +30,18 @@ class SessionPreprocessor:
     @staticmethod
     def process(events: List[RRWebEvent]) -> ProcessedSession:
         """
-        Processa uma lista de eventos brutos do rrweb em estruturas otimizadas para análise.
-        
-        Executa um único loop O(N) para extrair:
-        - Vetores cinemáticos (timestamp, x, y) para detecção de anomalias via heurísticas
-        - Ações do usuário (cliques, inputs, navegação) para geração de narrativa via LLM
-        - Mapa DOM simplificado para contexto enriquecido das interações
-        
-        Args:
-            events (List[RRWebEvent]): Lista de eventos brutos capturados pelo rrweb.
-            
-        Returns:
-            ProcessedSession: Objeto contendo os dados processados organizados em buckets otimizados.
+        Processa uma lista de eventos brutos do rrweb em artefatos neutros.
+
+        Contrato de saída:
+        - `dom_map` e `flattened_dom`: visão simplificada e navegável da interface.
+        - `raw_actions`: eventos observáveis ligados ao DOM sem fechar semântica.
+        - `event_index`: índice auxiliar para buscas determinísticas por tipo/alvo.
+        - `kinematics`: trajetória barata que ainda é útil para sinais globais.
+        - `page_metadata`: contexto macro de navegação.
+
+        A decisão arquitetural aqui é não antecipar agrupamento semântico. O
+        pipeline antigo fazia esse fechamento cedo demais e contaminava o resto
+        do fluxo com artefatos técnicos do rrweb.
         """
         if not events:
             return ProcessedSession(initial_timestamp=0, total_duration=0)
@@ -45,8 +56,13 @@ class SessionPreprocessor:
         kinematics: List[KinematicVector] = []
         actions: List[UserAction] = []
         dom_map: Dict[int, str] = {}
+        flattened_dom: List[FlatDOMNode] = []
+        raw_actions: List[RawAction] = []
+        event_index: Dict[str, List[int]] = defaultdict(list)
+        page_metadata = PageMetadata()
+        current_page_url: Optional[str] = None
 
-        # Mapeamento de Constantes internas do protocolo RRWeb v2
+        # Mapeamento de constantes internas do protocolo rrweb
         TYPE_DOM_SNAPSHOT = 2    # Captura completa do estado atual da página
         TYPE_INCREMENTAL = 3     # Mudanças granulares (movimento, clique, scroll, mutação)
         TYPE_META = 4            # Informações sobre a página (URL, tamanho da tela)
@@ -77,8 +93,18 @@ class SessionPreprocessor:
                 if evt_type == TYPE_DOM_SNAPSHOT:
                     root_node = data.get('node')
                     if root_node:
-                        # Achata a estrutura de árvore recursiva em um mapa linear de ID -> HTML
-                        SessionPreprocessor._flatten_dom_tree(root_node, dom_map)
+                        # A refatoração preserva uma versão achatada do DOM com relações
+                        # explícitas pai/filho para que o executor siga o plano da fase 1
+                        # sem pedir que o LLM "leia" o rrweb inteiro.
+                        flattened_dom.clear()
+                        dom_map.clear()
+                        SessionPreprocessor._flatten_dom_tree(
+                            root_node,
+                            dom_map,
+                            flattened_dom,
+                            parent_id=None,
+                            depth=0,
+                        )
 
                 # --- Ramo B: Meta Eventos (Navegação/Viewport) ---
                 elif evt_type == TYPE_META:
@@ -86,19 +112,49 @@ class SessionPreprocessor:
                     width = data.get('width')
 
                     if href:
+                        current_page_url = href
+                        if page_metadata.initial_url is None:
+                            page_metadata.initial_url = href
+                        page_metadata.current_url = href
+                        if not page_metadata.page_history or page_metadata.page_history[-1] != href:
+                            page_metadata.page_history.append(href)
                         # Registra transições de URL como ações de navegação
                         actions.append(UserAction(
                             timestamp=delta_ts,
                             action_type='navigation',
                             details=f"URL: {href}"
                         ))
+                        raw_actions.append(
+                            RawAction(
+                                timestamp=delta_ts,
+                                action_type="navigation",
+                                event_type=evt_type,
+                                event_index=idx,
+                                page_url=current_page_url,
+                                details={"href": href},
+                            )
+                        )
+                        event_index["navigation"].append(idx)
                     elif width:
+                        page_metadata.viewport_width = width
+                        page_metadata.viewport_height = data.get("height")
                         # Registra mudanças na viewport do usuário
                         actions.append(UserAction(
                             timestamp=delta_ts,
                             action_type='resize',
                             details=f"Viewport: {width}x{data.get('height')}"
                         ))
+                        raw_actions.append(
+                            RawAction(
+                                timestamp=delta_ts,
+                                action_type="resize",
+                                event_type=evt_type,
+                                event_index=idx,
+                                page_url=current_page_url,
+                                details={"width": width, "height": data.get("height")},
+                            )
+                        )
+                        event_index["resize"].append(idx)
 
                 # --- Ramo C: Eventos Incrementais (Interações Ativas) ---
                 elif evt_type == TYPE_INCREMENTAL:
@@ -162,6 +218,23 @@ class SessionPreprocessor:
                                 target_id=target_id,
                                 details=f"Element: {node_html} | Coords: ({data.get('x')}, {data.get('y')})"
                             ))
+                            raw_actions.append(
+                                RawAction(
+                                    timestamp=delta_ts,
+                                    action_type="click",
+                                    event_type=evt_type,
+                                    source=source,
+                                    event_index=idx,
+                                    target_id=target_id,
+                                    page_url=current_page_url,
+                                    x=data.get("x"),
+                                    y=data.get("y"),
+                                    details={"html": node_html},
+                                )
+                            )
+                            event_index["click"].append(idx)
+                            if target_id is not None:
+                                event_index[f"target:{target_id}"].append(idx)
 
                     # C.3: Ações do Usuário (LLM) - Scroll (Rolagem)
                     elif source == SOURCE_SCROLL:
@@ -175,6 +248,22 @@ class SessionPreprocessor:
                                 action_type='scroll',
                                 details=f"Scroll: direction={direction} deltaY={delta_y} scrollY={scroll_y}"
                             ))
+                            raw_actions.append(
+                                RawAction(
+                                    timestamp=delta_ts,
+                                    action_type="scroll",
+                                    event_type=evt_type,
+                                    source=source,
+                                    event_index=idx,
+                                    page_url=current_page_url,
+                                    details={
+                                        "direction": direction,
+                                        "deltaY": delta_y,
+                                        "scrollY": scroll_y,
+                                    },
+                                )
+                            )
+                            event_index["scroll"].append(idx)
 
                     # C.4: Redimensionamento de janela (Resize)
                     elif source == SOURCE_RESIZE:
@@ -185,6 +274,18 @@ class SessionPreprocessor:
                                 action_type='resize',
                                 details=f"Viewport: {width}x{data.get('height')}"
                             ))
+                            raw_actions.append(
+                                RawAction(
+                                    timestamp=delta_ts,
+                                    action_type="resize",
+                                    event_type=evt_type,
+                                    source=source,
+                                    event_index=idx,
+                                    page_url=current_page_url,
+                                    details={"width": width, "height": data.get("height")},
+                                )
+                            )
+                            event_index["resize"].append(idx)
 
                     # C.5: Ações do Usuário (LLM) - Digitação (Inputs)
                     elif source == SOURCE_INPUT:
@@ -212,6 +313,23 @@ class SessionPreprocessor:
                             target_id=target_id,
                             details=details
                         ))
+                        raw_actions.append(
+                            RawAction(
+                                timestamp=delta_ts,
+                                action_type="input",
+                                event_type=evt_type,
+                                source=source,
+                                event_index=idx,
+                                target_id=target_id,
+                                page_url=current_page_url,
+                                value=text_val if text_val is not None else None,
+                                checked=is_checked if isinstance(is_checked, bool) else None,
+                                details={"html": node_context, "text": text_val},
+                            )
+                        )
+                        event_index["input"].append(idx)
+                        if target_id is not None:
+                            event_index[f"target:{target_id}"].append(idx)
             except Exception as exc:
                 # Loga o erro mas continua o processamento para não perder a sessão inteira por um evento malformado
                 logger.warning(
@@ -233,15 +351,30 @@ class SessionPreprocessor:
             total_duration=total_duration,
             kinematics=kinematics,
             actions=actions,
-            dom_map=dom_map
+            dom_map=dom_map,
+            flattened_dom=flattened_dom,
+            raw_actions=raw_actions,
+            event_index=dict(event_index),
+            page_metadata=page_metadata,
         )
 
     @staticmethod
-    def _flatten_dom_tree(node: Dict[str, Any], dom_map: Dict[int, str], ancestors: Optional[List[Dict[str, Any]]] = None):
+    def _flatten_dom_tree(
+        node: Dict[str, Any],
+        dom_map: Dict[int, str],
+        flattened_dom: List[FlatDOMNode],
+        ancestors: Optional[List[Dict[str, Any]]] = None,
+        parent_id: Optional[int] = None,
+        depth: int = 0,
+    ) -> None:
         """
-        Percorre recursivamente a árvore JSON do rrweb.
-        Objetivo: Criar uma representação HTML 'token-efficient' (compacta) para o LLM.
-        Ignora nós irrelevantes como CSS e scripts para focar na semântica da interface.
+        Percorre recursivamente a árvore rrweb para construir um DOM simplificado.
+
+        A estrutura achatada resultante substitui a dependência do pipeline
+        antigo em snippets soltos de HTML. O agente estrutural recebe apenas a
+        visão necessária, enquanto o executor determinístico preserva ids e
+        relações estruturais para resolver labels e containers sem heurísticas
+        espalhadas.
         """
         ancestors = ancestors or []
         node_id = node.get('id')
@@ -340,9 +473,32 @@ class SessionPreprocessor:
             # Montagem do HTML sintético: <button class="btn">Login</button>
             simplified_html = f"<{tag_name}{attrs_str}>{text_content.strip()}</{tag_name}>"
             dom_map[node_id] = simplified_html
+            flattened_dom.append(
+                FlatDOMNode(
+                    node_id=node_id,
+                    tag=tag_name,
+                    attributes={str(k): str(v) for k, v in attributes.items()},
+                    text=normalize_text(text_content.strip(), 120),
+                    simplified_html=simplified_html,
+                    parent_id=parent_id,
+                    depth=depth,
+                )
+            )
+            if parent_id is not None:
+                for existing in flattened_dom:
+                    if existing.node_id == parent_id:
+                        existing.child_ids.append(node_id)
+                        break
 
         # Chamada recursiva para processar os filhos da árvore (Depth-First Search)
         if 'childNodes' in node:
             for child in node['childNodes']:
                 next_ancestors = ancestors + [row_context] if row_context else ancestors
-                SessionPreprocessor._flatten_dom_tree(child, dom_map, next_ancestors)
+                SessionPreprocessor._flatten_dom_tree(
+                    child,
+                    dom_map,
+                    flattened_dom,
+                    next_ancestors,
+                    parent_id=node_id if node_id and tag_name else parent_id,
+                    depth=depth + 1,
+                )

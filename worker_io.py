@@ -24,7 +24,7 @@ from sqlmodel import Session as DBSession
 
 from config import settings
 from database import engine, init_db
-from services.pipeline.session_job_processor import mark_analysis_status, process_session_events
+from services.session_processing.session_job_processor import mark_analysis_status, process_session_events
 
 # Configuração de logging
 logging.basicConfig(

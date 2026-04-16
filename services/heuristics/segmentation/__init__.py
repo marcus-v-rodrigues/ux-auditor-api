@@ -1,2 +1,0 @@
-"""Heurísticas de segmentação."""
-
