@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from services.heuristics.types import HeuristicMatch
 from services.semantic_analysis.canonical_interactions import CanonicalInteraction, ResolvedElement
-from services.semantic_analysis.phase1_models import Phase1ExtractionPlan
+from services.semantic_analysis.phase1.models import Phase1ExtractionPlan
 from services.semantic_analysis.segmentation import SessionSegment
 
 

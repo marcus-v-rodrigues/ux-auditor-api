@@ -12,9 +12,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 from services.session_processing.data_processor import SessionPreprocessor
 from services.session_processing.models import ProcessedSession, RRWebEvent
-from services.semantic_analysis.final_analysis_agent import AnalysisResult, generate_final_session_analysis
+from services.semantic_analysis.phase2.runner import AnalysisResult, generate_final_session_analysis
 from services.semantic_analysis.heuristic_analysis import detect_heuristics
-from services.semantic_analysis.phase1_runner import run_phase1_extraction_plan
+from services.semantic_analysis.phase1.runner import run_phase1_extraction_plan
 from services.semantic_analysis.plan_executor import execute_phase1_plan
 from services.semantic_analysis.segmentation import segment_session
 from services.semantic_analysis.semantic_bundle import SemanticSessionBundle, build_semantic_bundle

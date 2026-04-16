@@ -14,8 +14,8 @@ from collections import Counter
 from typing import Any, Dict, List
 
 from services.session_processing.models import FlatDOMNode, ProcessedSession
-from services.semantic_analysis.phase1_agent import request_phase1_plan
-from services.semantic_analysis.phase1_models import (
+from services.semantic_analysis.phase1.agent import request_phase1_plan
+from services.semantic_analysis.phase1.models import (
     AggregationRule,
     AttributePattern,
     CriticalControlPlan,

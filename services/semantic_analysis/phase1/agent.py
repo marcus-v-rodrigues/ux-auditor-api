@@ -11,8 +11,8 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, Optional
 
-from services.semantic_analysis.phase1_models import Phase1ExtractionPlan
-from services.semantic_analysis.phase1_prompt import PHASE1_DEVELOPER_PROMPT, PHASE1_SYSTEM_PROMPT
+from services.semantic_analysis.phase1.models import Phase1ExtractionPlan
+from services.semantic_analysis.phase1.prompt import PHASE1_DEVELOPER_PROMPT, PHASE1_SYSTEM_PROMPT
 
 try:  # pragma: no cover - depende de ambiente externo
     import instructor

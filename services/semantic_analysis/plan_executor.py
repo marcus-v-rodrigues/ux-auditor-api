@@ -14,7 +14,7 @@ from typing import Dict, Iterable, List, Optional
 from services.domain.interaction_patterns import normalize_text, page_key_from_url
 from services.session_processing.models import FlatDOMNode, ProcessedSession, RawAction
 from services.semantic_analysis.canonical_interactions import CanonicalInteraction, PlanExecutionResult, ResolvedElement
-from services.semantic_analysis.phase1_models import FieldGroupPlan, LabelResolutionPlan, Phase1ExtractionPlan, RegionOfInterestPlan, SelectorHints
+from services.semantic_analysis.phase1.models import FieldGroupPlan, LabelResolutionPlan, Phase1ExtractionPlan, RegionOfInterestPlan, SelectorHints
 
 
 class _DOMIndex:

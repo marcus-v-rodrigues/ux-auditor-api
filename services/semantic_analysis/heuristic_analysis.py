@@ -19,7 +19,7 @@ from services.heuristics.behavioral import detect_behavioral_heuristics
 from services.heuristics.types import HeuristicContext, HeuristicMatch
 from services.session_processing.models import ProcessedSession
 from services.semantic_analysis.canonical_interactions import CanonicalInteraction
-from services.semantic_analysis.phase1_models import Phase1ExtractionPlan
+from services.semantic_analysis.phase1.models import Phase1ExtractionPlan
 
 
 def _structural_matches(plan: Phase1ExtractionPlan) -> List[HeuristicMatch]:
