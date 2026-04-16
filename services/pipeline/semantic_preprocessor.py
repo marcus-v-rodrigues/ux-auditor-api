@@ -16,6 +16,7 @@ from services.pipeline.models import ProcessedSession, RRWebEvent
 from services.semantic.contracts import SemanticActionRecord, SemanticExtractionContext, SemanticSessionSummary
 from services.domain.interaction_patterns import (
     build_target_descriptor,
+    infer_radio_option_label,
     infer_input_kind,
     infer_scroll_direction,
     normalize_text,
@@ -104,6 +105,85 @@ def _append_page_transition(
     )
 
 
+RADIO_GROUP_WINDOW_MS = 50
+
+
+def _normalize_radio_clusters(records: List[SemanticActionRecord]) -> List[SemanticActionRecord]:
+    """Colapsa múltiplos eventos técnicos de radio em uma única ação semântica real."""
+    if not records:
+        return []
+
+    ordered = records
+    normalized: List[SemanticActionRecord] = []
+    cluster: List[SemanticActionRecord] = []
+
+    def flush() -> None:
+        if not cluster:
+            return
+        checked_records = [item for item in cluster if item.checked is True]
+        if not checked_records:
+            cluster.clear()
+            return
+
+        selected = checked_records[-1]
+        unchecked_options = []
+        for item in cluster:
+            if item is selected:
+                continue
+            option_label = item.metadata.get("radio_option_label") or item.value or item.semantic_label
+            if option_label is not None:
+                unchecked_options.append(option_label)
+
+        metadata = dict(selected.metadata)
+        metadata.update(
+            {
+                "unchecked_options": unchecked_options,
+                "group_size": len(cluster),
+                "normalized_from": [item.metadata.get("target_id") for item in cluster if item.metadata.get("target_id") is not None],
+                "radio_window_ms": RADIO_GROUP_WINDOW_MS,
+            }
+        )
+        scale_label = selected.metadata.get("radio_option_label")
+        normalized.append(
+            SemanticActionRecord(
+                t=selected.t,
+                kind="radio_selection",
+                target=selected.target_group or selected.target,
+                target_group=selected.target_group or selected.target,
+                semantic_label=selected.semantic_label or selected.details or selected.target_group or "radio_selection",
+                page=selected.page,
+                value=selected.value,
+                checked=True,
+                details=f"{selected.semantic_label or selected.target_group}={selected.value}" if selected.value is not None else selected.semantic_label,
+                metadata={
+                    **metadata,
+                    "scale_label": scale_label,
+                    "normalized_radio": True,
+                },
+            )
+        )
+        cluster.clear()
+
+    for record in ordered:
+        if not cluster:
+            cluster.append(record)
+            continue
+
+        prev = cluster[-1]
+        same_page = (record.page or "unknown_page") == (prev.page or "unknown_page")
+        same_group = (record.target_group or record.target) == (prev.target_group or prev.target)
+        close_enough = abs(record.t - prev.t) <= RADIO_GROUP_WINDOW_MS
+        if same_page and same_group and close_enough:
+            cluster.append(record)
+            continue
+
+        flush()
+        cluster.append(record)
+
+    flush()
+    return normalized
+
+
 class SemanticPreprocessor:
     """
     Extrai fatos observáveis e ações normalizadas a partir do rastro bruto de eventos.
@@ -139,21 +219,15 @@ class SemanticPreprocessor:
         page_transitions: List[Dict[str, Any]] = []
         target_visit_counts: Counter = Counter()
         group_visit_counts: Counter = Counter()
-        action_kind_counts: Counter = Counter()
-        value_history: Dict[str, str] = {}
-        checked_history: Dict[str, bool] = {}
         current_page: Optional[str] = None
         previous_page: Optional[str] = None
         last_timestamp = events[0].timestamp
+        radio_raw_records: List[SemanticActionRecord] = []
 
         # Acumuladores de métricas brutas
-        click_count = 0
-        input_count = 0
         scroll_count = 0
         mouse_move_count = 0
         resize_count = 0
-        navigation_count = 0
-        value_change_count = 0
 
         relative_actions: List[Tuple[int, str, Optional[str], Optional[str], Optional[str]]] = []
 
@@ -170,7 +244,6 @@ class SemanticPreprocessor:
                 href = normalize_url(data.get("href"))
                 if href:
                     current_page = href
-                    navigation_count += 1
                     page_key = page_key_from_url(href)
                     # Registra histórico apenas se houver mudança real de página (ignora loops de meta idênticos)
                     if not page_history or page_history[-1] != page_key:
@@ -192,7 +265,6 @@ class SemanticPreprocessor:
                             details=f"URL: {href}",
                         )
                     )
-                    action_kind_counts["navigation"] += 1
                     relative_actions.append((timestamp - events[0].timestamp, "navigation", page_key, page_key, href))
                 elif data.get("width") is not None:
                     # Captura redimensionamento de janela
@@ -207,7 +279,6 @@ class SemanticPreprocessor:
                             metadata={"width": data.get("width"), "height": data.get("height")},
                         )
                     )
-                    action_kind_counts["resize"] += 1
                     relative_actions.append((timestamp - events[0].timestamp, "resize", current_page, None, None))
                 continue
 
@@ -225,7 +296,6 @@ class SemanticPreprocessor:
 
             # Ramo: Mouse Interaction (Cliques discretos)
             if source == 2 and data.get("type") == 2: # Tipo 2 = Click completo (down+up)
-                click_count += 1
                 target_id = data.get("id")
                 # Resolução do elemento HTML alvo via mapa DOM gerado no início da sessão
                 html_snippet = dom_map.get(target_id)
@@ -244,35 +314,55 @@ class SemanticPreprocessor:
                         metadata={"target_id": target_id, "html": html_snippet},
                     )
                 )
-                action_kind_counts["click"] += 1
-                _record_visit(target_visit_counts, descriptor.target)
-                _record_visit(group_visit_counts, descriptor.target_group)
                 relative_actions.append((delta_t, "click", descriptor.target, descriptor.target_group, descriptor.semantic_label))
                 continue
 
             # Ramo: Input (Entrada de dados, Toggles, Seleções)
             if source == 5:
-                input_count += 1
                 target_id = data.get("id")
                 html_snippet = dom_map.get(target_id)
                 raw_text = data.get("text")
                 checked = data.get("isChecked")
                 # Infere o tipo específico de controle (checkbox, radio, text-input) via inspeção do snippet
                 kind = infer_input_kind(html_snippet, checked, raw_text)
-                descriptor = build_target_descriptor(kind=kind, target_id=target_id, html_snippet=html_snippet, value=raw_text, checked=checked)
-                
-                # Detecção de revisões: verifica se o novo valor difere do último registrado para o mesmo elemento
+                scale_label = None
+                if html_snippet:
+                    parsed_descriptor = build_target_descriptor(
+                        kind=kind,
+                        target_id=target_id,
+                        html_snippet=html_snippet,
+                        value=raw_text,
+                        checked=checked,
+                    )
+                    scale_label = infer_radio_option_label(parsed_descriptor.attributes, normalize_text(raw_text, 80))
+                    descriptor = parsed_descriptor
+                else:
+                    descriptor = build_target_descriptor(kind=kind, target_id=target_id, html_snippet=html_snippet, value=raw_text, checked=checked)
+
                 normalized_value = normalize_text(raw_text, 80)
-                if normalized_value is not None:
-                    previous_value = value_history.get(descriptor.target)
-                    if previous_value is not None and previous_value != normalized_value:
-                        value_change_count += 1
-                    value_history[descriptor.target] = normalized_value
-                if checked is not None:
-                    previous_checked = checked_history.get(descriptor.target)
-                    if previous_checked is not None and previous_checked != checked:
-                        value_change_count += 1
-                    checked_history[descriptor.target] = bool(checked)
+                metadata = {
+                    "target_id": target_id,
+                    "html": html_snippet,
+                    "radio_option_label": scale_label,
+                }
+                if kind == "radio":
+                    # Radios são eventos compostos: o rrweb emite checked=true/false para a mesma interação.
+                    # Guardamos o evento bruto e o normalizador colapsa tudo em uma única radio_selection.
+                    radio_raw_records.append(
+                        SemanticActionRecord(
+                            t=delta_t,
+                            kind=kind,
+                            target=descriptor.target,
+                            target_group=descriptor.target_group,
+                            semantic_label=descriptor.semantic_label,
+                            page=current_page_key,
+                            value=normalized_value,
+                            checked=checked,
+                            details=descriptor.semantic_label,
+                            metadata=metadata,
+                        )
+                    )
+                    continue
 
                 action_records.append(
                     SemanticActionRecord(
@@ -284,13 +374,10 @@ class SemanticPreprocessor:
                         page=current_page_key,
                         value=normalized_value,
                         checked=checked,
-                        details=descriptor.semantic_label,
-                        metadata={"target_id": target_id, "html": html_snippet},
+                        details=descriptor.semantic_label if normalized_value is None else f"{descriptor.semantic_label}={normalized_value}",
+                        metadata=metadata,
                     )
                 )
-                action_kind_counts[kind] += 1
-                _record_visit(target_visit_counts, descriptor.target)
-                _record_visit(group_visit_counts, descriptor.target_group)
                 relative_actions.append((delta_t, kind, descriptor.target, descriptor.target_group, descriptor.semantic_label))
                 continue
 
@@ -316,10 +403,40 @@ class SemanticPreprocessor:
                 continue
 
         # --- CONSOLIDAÇÃO DOS FATOS ---
-        # Inferência de eventos de hover baseados nos pontos de rastro salvos no processed.kinematics
+        # Radios são eventos compostos no rrweb: um checked=true e vários checked=false no mesmo instante.
+        # O normalizador abaixo converte esse ruído técnico em uma única ação semântica real.
+        action_records.extend(_normalize_radio_clusters(radio_raw_records))
+
+        final_actions = sorted(action_records, key=lambda item: item.t)
+        action_kind_counts: Counter = Counter(action.kind for action in final_actions)
+
+        for action in final_actions:
+            _record_visit(target_visit_counts, action.target)
+            _record_visit(group_visit_counts, action.target_group)
+
+        value_change_count = 0
+        last_signature_by_target: Dict[str, Tuple[str, Any]] = {}
+        for action in final_actions:
+            key = action.target or action.target_group or action.page
+            if not key:
+                continue
+            if action.value is not None:
+                signature: Tuple[str, Any] = ("value", action.value)
+            elif action.checked is not None:
+                signature = ("checked", action.checked)
+            else:
+                continue
+            previous_signature = last_signature_by_target.get(key)
+            if previous_signature is not None and previous_signature != signature:
+                value_change_count += 1
+            last_signature_by_target[key] = signature
+
         hover_count, hover_samples = _infer_hover_events(kinematics)
-        
-        # Geração do sumário estatístico de alto nível
+        click_count = action_kind_counts.get("click", 0)
+        input_count = sum(action_kind_counts.get(kind, 0) for kind in {"input", "checkbox", "select", "toggle", "radio_selection"})
+        scroll_count = action_kind_counts.get("scroll", 0)
+        resize_count = action_kind_counts.get("resize", 0)
+
         session_summary = SemanticSessionSummary(
             duration_ms=last_timestamp - events[0].timestamp,
             pages=max(len(page_history), 1),
@@ -335,7 +452,11 @@ class SemanticPreprocessor:
             value_changes=value_change_count,
         )
 
-        # Montagem do dicionário de fatos estruturados para consumo pela IA
+        relative_preview = [
+            (action.t, action.kind, action.target, action.target_group, action.semantic_label)
+            for action in final_actions[:50]
+        ]
+
         observed_facts = {
             "session_summary": session_summary.model_dump(),
             "pages_visited": page_history,
@@ -344,13 +465,13 @@ class SemanticPreprocessor:
             "elements_most_interacted": [{"target": target, "count": count} for target, count in target_visit_counts.most_common(20)],
             "hover_samples": hover_samples,
             "action_kind_counts": dict(action_kind_counts),
-            "relative_actions_preview": relative_actions[:50], # Amostra para depuração rápida
+            "relative_actions_preview": relative_preview, # Amostra para depuração rápida
         }
 
         return SemanticExtractionContext(
             session_summary=session_summary,
             observed_facts=observed_facts,
-            semantic_actions=action_records,
+            semantic_actions=final_actions,
             page_history=page_history,
             page_transitions=page_transitions,
             kinematics=kinematics,

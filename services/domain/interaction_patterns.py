@@ -41,6 +41,7 @@ ATTR_RE = re.compile(r'([a-zA-Z0-9:-]+)\s*=\s*"([^"]*)"')
 SINGLE_ATTR_RE = re.compile(r"([a-zA-Z0-9:-]+)\s*=\s*'([^']*)'")
 # Identifica sufixos numéricos em strings (ex: field_1 -> 1) para análise de ordem de preenchimento.
 NUMERIC_SUFFIX_RE = re.compile(r"(\d+)$")
+RADIO_LABEL_SPLIT_RE = re.compile(r"[|;/]")
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,42 @@ def _parse_html_snippet(html_snippet: Optional[str]) -> Dict[str, Any]:
     }
 
 
+def _split_label_list(value: Optional[str]) -> list[str]:
+    """Divide listas compactadas de labels sem introduzir ruído nos rótulos."""
+    if not value:
+        return []
+    labels = [normalize_text(part, 60) for part in RADIO_LABEL_SPLIT_RE.split(str(value))]
+    return [label for label in labels if label]
+
+
+def _radio_option_label(attributes: Dict[str, str], value: Optional[str]) -> Optional[str]:
+    """Mapeia o valor do radio para o texto humano da escala quando a grade traz labels por posição."""
+    labels = _split_label_list(attributes.get("data-scale-labels") or attributes.get("data-scale-label"))
+    if not labels:
+        return None
+    if value is None:
+        return labels[0]
+
+    try:
+        numeric_value = int(str(value))
+    except (TypeError, ValueError):
+        normalized = normalize_text(str(value))
+        if normalized and normalized in labels:
+            return normalized
+        return labels[0]
+
+    if 1 <= numeric_value <= len(labels):
+        return labels[numeric_value - 1]
+    if 0 <= numeric_value < len(labels):
+        return labels[numeric_value]
+    return labels[-1]
+
+
+def infer_radio_option_label(attributes: Dict[str, str], value: Optional[str]) -> Optional[str]:
+    """Extrai o rótulo humano da alternativa marcada em um radio normalizado."""
+    return _radio_option_label(attributes, value)
+
+
 def _pick_label(parsed: Dict[str, Any]) -> str:
     """Escolhe o melhor nome legível para um elemento baseado em uma hierarquia de prioridades (heurística de acessibilidade)."""
     attributes = parsed["attributes"]
@@ -188,13 +225,17 @@ def build_target_descriptor(
     html_snippet: Optional[str],
     value: Optional[str] = None,
     checked: Optional[bool] = None,
+    semantic_context: Optional[Dict[str, Any]] = None,
 ) -> TargetDescriptor:
     """Constrói o objeto descritivo final normalizado, centralizando a lógica de semântica do projeto."""
     parsed = _parse_html_snippet(html_snippet)
     tag = parsed["tag"]
+    attributes = parsed["attributes"]
     label = _pick_label(parsed)
     group = _pick_group(parsed)
     area = _pick_area(parsed, group)
+    semantic_context = semantic_context or {}
+    input_type = (attributes.get("type") or "").lower()
 
     # Montagem da chave técnica estável 'target' para identificação unívoca no rastro
     suffix_bits = [kind]
@@ -212,7 +253,32 @@ def build_target_descriptor(
     if descriptor_value and kind in {"input", "toggle", "selection"}:
         suffix_bits.append(descriptor_value)
 
+    # Radio precisa ser tratado como evento composto: o campo técnico representa a pergunta,
+    # enquanto o valor selecionado fica em `value` e em `metadata`. Isso evita multiplicar
+    # eventos por causa dos `checked=false` gerados pelo rrweb no mesmo instante.
+    if input_type == "radio" or kind == "radio_selection":
+        question_label = normalize_text(
+            semantic_context.get("question_label")
+            or attributes.get("data-question-label")
+            or attributes.get("data-radio-question")
+            or label
+        )
+        if question_label:
+            label = question_label
+        group_name = normalize_text(
+            semantic_context.get("group_name")
+            or attributes.get("name")
+            or attributes.get("data-radio-group")
+            or group
+        )
+        if group_name:
+            group = group_name if group_name.startswith("radio:") else f"radio:{group_name}"
+
     target = ":".join([bit for bit in suffix_bits if bit])
+    if input_type == "radio" or kind == "radio_selection":
+        # Mantém um único alvo por pergunta para que a seleção consolidada não gere
+        # múltiplos candidatos downstream.
+        target = group or target
     
     # Enriquecimento do rótulo semântico para o LLM (ex: "Username=joao_silva")
     semantic_label = label
@@ -221,8 +287,7 @@ def build_target_descriptor(
 
     # Especialização para tags de input genéricas: identifica se é email, password, etc.
     if tag == "input":
-        input_type = parsed["attributes"].get("type")
-        if input_type:
+        if input_type and input_type != "radio":
             semantic_label = f"{input_type}:{semantic_label}"
             group = f"{input_type}:{group}"
 

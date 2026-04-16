@@ -84,7 +84,7 @@ def _mergeable(previous: CompactAction, current: SemanticActionRecord) -> bool:
         return previous.target == current.target
         
     # Agrupamento de formulários (Sequential Filling)
-    if previous.kind in {"input", "radio", "checkbox", "select", "toggle"}:
+    if previous.kind in {"input", "radio_selection", "checkbox", "select", "toggle"}:
         # Typing no mesmo campo
         if previous.target == current.target:
             previous_signature = f"value:{previous.value}" if previous.value is not None else f"checked:{previous.checked}" if previous.checked is not None else None
@@ -163,7 +163,7 @@ def compress_action_trace(
             current.end = record.t
             
             # Atribuição de padrões semânticos baseada na fusão
-            if current.kind in {"input", "radio", "checkbox", "select", "toggle"} and current.target_group == record.target_group:
+            if current.kind in {"input", "radio_selection", "checkbox", "select", "toggle"} and current.target_group == record.target_group:
                 current.pattern = "sequential_form_filling"
                 current.semantic_label = current.semantic_label or record.semantic_label
                 pattern_counter["sequential_form_filling"] += 1
@@ -173,7 +173,7 @@ def compress_action_trace(
             elif current.kind == "scroll":
                 current.pattern = "scroll_continuous"
                 pattern_counter["scroll_continuous"] += 1
-            elif current.kind in {"radio", "checkbox", "toggle"}:
+            elif current.kind in {"checkbox", "toggle"}:
                 current.pattern = "selection_oscillation"
                 pattern_counter["selection_oscillation"] += 1
             continue

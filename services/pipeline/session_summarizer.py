@@ -89,6 +89,8 @@ class SemanticSessionSummarizer:
         derived_signals: Dict[str, Any] = {
             # Distribuição de tipos de ação (ajuda a identificar sessões puramente exploratórias vs preenchimento)
             "action_kind_distribution": dict(Counter(action.kind for action in extraction.semantic_actions)),
+            # Radios já chegam normalizados como `radio_selection`, então contam como uma única intenção por pergunta.
+            "radio_selection_count": sum(1 for action in extraction.semantic_actions if action.kind == "radio_selection"),
             # Razão de revisitas: métrica de redundância e possível confusão do usuário na interface.
             "target_revisit_ratio": round(
                 float(sum(max(count - 1, 0) for count in extraction.target_visit_counts.values())) / max(len(extraction.semantic_actions), 1),

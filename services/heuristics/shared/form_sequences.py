@@ -23,7 +23,7 @@ from services.heuristics.base import (
 )
 from services.heuristics.types import HeuristicContext
 
-INPUT_KINDS = {"input", "radio", "checkbox", "select", "toggle"}
+INPUT_KINDS = {"input", "radio_selection", "checkbox", "select", "toggle"}
 NUMERIC_SUFFIX_RE = re.compile(r"(\d+)$")
 
 

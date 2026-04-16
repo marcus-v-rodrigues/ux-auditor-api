@@ -25,6 +25,7 @@ def detect_revisit_windows(ctx: HeuristicContext) -> List[Dict[str, Any]]:
     windows: List[Dict[str, Any]] = []
     seen_targets: Dict[str, Any] = {}
     seen_groups: Dict[str, Any] = {}
+    radio_window_ms = int(get_config(ctx, "radio_group_window_ms", 50))
 
     target_counts: Dict[str, int] = defaultdict(int)
     group_counts: Dict[str, int] = defaultdict(int)
@@ -36,6 +37,9 @@ def detect_revisit_windows(ctx: HeuristicContext) -> List[Dict[str, Any]]:
             target_counts[target] += 1
             if target in seen_targets:
                 prev = seen_targets[target]
+                if action_kind(action) == "radio_selection" and action_kind(prev) == "radio_selection" and action_timestamp(action) - action_timestamp(prev) <= radio_window_ms:
+                    seen_targets[target] = action
+                    continue
                 windows.append(
                     {
                         "kind": "element_revisit",
@@ -53,6 +57,9 @@ def detect_revisit_windows(ctx: HeuristicContext) -> List[Dict[str, Any]]:
             group_counts[group] += 1
             if group in seen_groups:
                 prev = seen_groups[group]
+                if action_kind(action) == "radio_selection" and action_kind(prev) == "radio_selection" and action_timestamp(action) - action_timestamp(prev) <= radio_window_ms:
+                    seen_groups[group] = action
+                    continue
                 windows.append(
                     {
                         "kind": "group_revisit",
@@ -83,6 +90,8 @@ def detect_rapid_alternation_windows(ctx: HeuristicContext) -> List[Dict[str, An
         window = actions[idx : idx + 4]
         first_ts = action_timestamp(window[0])
         if action_timestamp(window[-1]) - first_ts > window_ms:
+            continue
+        if any(action_kind(item) == "radio_selection" for item in window):
             continue
         targets = [action_target(item) or action_group(item) or action_kind(item) for item in window]
         if targets[0] == targets[2] and targets[1] == targets[3] and targets[0] != targets[1]:

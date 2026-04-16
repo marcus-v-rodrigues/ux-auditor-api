@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 from services.pipeline.models import KinematicVector, ProcessedSession, RRWebEvent, UserAction
+from services.domain.interaction_patterns import normalize_text
 
 # Configuração de Logs para monitoramento do processamento de traços de eventos
 logger = logging.getLogger("ux_auditor")
@@ -236,18 +237,55 @@ class SessionPreprocessor:
         )
 
     @staticmethod
-    def _flatten_dom_tree(node: Dict[str, Any], dom_map: Dict[int, str]):
+    def _flatten_dom_tree(node: Dict[str, Any], dom_map: Dict[int, str], ancestors: Optional[List[Dict[str, Any]]] = None):
         """
         Percorre recursivamente a árvore JSON do rrweb.
         Objetivo: Criar uma representação HTML 'token-efficient' (compacta) para o LLM.
         Ignora nós irrelevantes como CSS e scripts para focar na semântica da interface.
         """
+        ancestors = ancestors or []
         node_id = node.get('id')
         tag_name = node.get('tagName', '').lower()
         
         # Filtro de exclusão: Nós que não contribuem para a análise visual/funcional do LLM
         if tag_name in SessionPreprocessor.IGNORED_TAGS:
             return
+
+        row_context: Dict[str, str] = {}
+
+        def _node_text(current_node: Dict[str, Any]) -> str:
+            pieces: List[str] = []
+            for child in current_node.get('childNodes', []):
+                if child.get('type') == 3:
+                    raw_text = normalize_text(child.get('textContent', ''), 80)
+                    if raw_text:
+                        pieces.append(raw_text)
+            return " ".join(pieces).strip()
+
+        def _radio_row_context(current_node: Dict[str, Any]) -> Dict[str, str]:
+            if current_node.get('tagName', '').lower() != 'tr':
+                return {}
+            question_label = None
+            scale_labels: List[str] = []
+            for child in current_node.get('childNodes', []):
+                child_tag = child.get('tagName', '').lower()
+                if child_tag != 'td':
+                    continue
+                child_attrs = child.get('attributes', {}) or {}
+                child_text = _node_text(child)
+                if not child_text:
+                    continue
+                child_classes = str(child_attrs.get('class', '') or '')
+                if 'item-name' in child_classes.split():
+                    question_label = normalize_text(child_text, 80)
+                    continue
+                scale_labels.append(normalize_text(child_text, 40) or child_text)
+            context: Dict[str, str] = {}
+            if question_label:
+                context['data-question-label'] = question_label
+            if scale_labels:
+                context['data-scale-labels'] = '|'.join(label for label in scale_labels if label)
+            return context
 
         # Processamos apenas nós do tipo Elemento (que possuem ID e Tag)
         if node_id and tag_name:
@@ -262,6 +300,29 @@ class SessionPreprocessor:
                     if len(v_str) > 50: 
                         v_str = v_str[:47] + "..."
                     attrs_str += f' {k}="{v_str}"'
+
+            ancestor_context: Dict[str, str] = {}
+            for ancestor in reversed(ancestors):
+                if ancestor.get('data-question-label') and 'data-question-label' not in ancestor_context:
+                    ancestor_context['data-question-label'] = ancestor['data-question-label']
+                if ancestor.get('data-scale-labels') and 'data-scale-labels' not in ancestor_context:
+                    ancestor_context['data-scale-labels'] = ancestor['data-scale-labels']
+                if ancestor_context.get('data-question-label') and ancestor_context.get('data-scale-labels'):
+                    break
+
+            row_context = _radio_row_context(node)
+            if row_context:
+                ancestor_context.update(row_context)
+
+            input_type = str(attributes.get('type', '')).lower()
+            if tag_name == 'input' and input_type == 'radio' and ancestor_context.get('data-question-label'):
+                question_label = ancestor_context["data-question-label"].replace('"', "'")
+                # O radio é composto: a pergunta vive na linha da tabela e deve acompanhar o input
+                # para que o pré-processador possa consolidar a seleção em uma única ação semântica.
+                attrs_str += f' data-question-label="{question_label}"'
+                if ancestor_context.get('data-scale-labels'):
+                    scale_labels = ancestor_context["data-scale-labels"].replace('"', "'")
+                    attrs_str += f' data-scale-labels="{scale_labels}"'
             
             # Extração de texto visível para ajudar o LLM a entender o rótulo do componente
             text_content = ""
@@ -283,4 +344,5 @@ class SessionPreprocessor:
         # Chamada recursiva para processar os filhos da árvore (Depth-First Search)
         if 'childNodes' in node:
             for child in node['childNodes']:
-                SessionPreprocessor._flatten_dom_tree(child, dom_map)
+                next_ancestors = ancestors + [row_context] if row_context else ancestors
+                SessionPreprocessor._flatten_dom_tree(child, dom_map, next_ancestors)

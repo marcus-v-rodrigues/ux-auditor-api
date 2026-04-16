@@ -137,7 +137,7 @@ def detect_repeated_toggle_windows(ctx: HeuristicContext) -> List[Dict[str, Any]
     state_history: Dict[str, List[Any]] = defaultdict(list)
     action_history: Dict[str, List[Any]] = defaultdict(list)
     for action in actions:
-        if action_kind(action) not in {"radio", "checkbox", "toggle"}:
+        if action_kind(action) not in {"checkbox", "toggle"}:
             continue
         key = action_target(action)
         if not key:
@@ -171,7 +171,7 @@ def detect_selection_oscillation_windows(ctx: HeuristicContext) -> List[Dict[str
     toggles = [
         action
         for action in actions
-        if action_kind(action) in {"radio", "checkbox", "toggle", "select"}
+        if action_kind(action) in {"checkbox", "toggle", "select"}
     ]
     if len(toggles) < 3:
         return []

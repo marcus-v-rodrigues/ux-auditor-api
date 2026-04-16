@@ -65,7 +65,7 @@ def build_page_artifacts(
 def _group_actions_by_target(actions: Sequence[SemanticActionRecord]) -> Dict[str, List[SemanticActionRecord]]:
     grouped: Dict[str, List[SemanticActionRecord]] = defaultdict(list)
     for action in actions:
-        target = action.target or action.target_group or action.page
+        target = action.target_group if action.kind == "radio_selection" else action.target or action.target_group or action.page
         if not target:
             continue
         grouped[target].append(action)
@@ -104,6 +104,8 @@ def build_element_candidates(
                 sample_details.append(record.details)
             if record.value is not None:
                 sample_values.append(str(record.value))
+            if record.kind == "radio_selection" and metadata.get("scale_label"):
+                sample_details.append(f"scale:{metadata.get('scale_label')}")
             if page is None:
                 page = record.page
             if target_group is None:
@@ -232,9 +234,23 @@ def build_evidence_catalog(
         )
 
     for item in extraction.semantic_actions[:15]:
-        if item.kind not in {"click", "input", "toggle", "checkbox", "radio", "select", "scroll"}:
+        if item.kind not in {"click", "input", "toggle", "checkbox", "radio_selection", "select", "scroll"}:
             continue
         target_ref = item.target or item.target_group or item.page or "unknown_target"
+        details = {
+            "kind": item.kind,
+            "page": item.page,
+            "target_group": item.target_group,
+        }
+        if item.kind == "radio_selection":
+            details.update(
+                {
+                    "selected_value": item.value,
+                    "scale_label": (item.metadata or {}).get("scale_label"),
+                    "unchecked_options": (item.metadata or {}).get("unchecked_options", []),
+                    "group_size": (item.metadata or {}).get("group_size"),
+                }
+            )
         evidence.append(
             CatalogedEvidence(
                 category="action",
@@ -242,11 +258,7 @@ def build_evidence_catalog(
                 description=f"Acao observada do tipo {item.kind} sobre {target_ref}.",
                 confidence=0.75,
                 source_refs=[f"action:{target_ref}@{item.t}"],
-                details={
-                    "kind": item.kind,
-                    "page": item.page,
-                    "target_group": item.target_group,
-                },
+                details=details,
             )
         )
 

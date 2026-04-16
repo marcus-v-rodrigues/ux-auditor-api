@@ -74,7 +74,7 @@ def detect_visual_search_bursts(ctx: HeuristicContext) -> List[Dict[str, Any]]:
     action_times = [
         action_timestamp(action)
         for action in ctx.actions or []
-        if str(getattr(action, "kind", "") or "") in {"click", "input", "radio", "checkbox", "select", "toggle"}
+        if str(getattr(action, "kind", "") or "") in {"click", "input", "radio_selection", "checkbox", "select", "toggle"}
     ]
     bursts: List[Dict[str, Any]] = []
     idx = 0

@@ -70,6 +70,8 @@ def detect_behavioral_evidence(
         "total_segments": len(segments),
         "heuristic_registry_size": len(BEHAVIOR_HEURISTICS),
         "compression_registry_size": len(COMPRESSION_HEURISTICS),
+        "radio_selection_count": sum(1 for item in ordered_actions if item.kind == "radio_selection"),
+        "radio_selection_groups": len({item.target_group for item in ordered_actions if item.kind == "radio_selection" and item.target_group}),
     }
 
     return BehavioralEvidenceResult(
