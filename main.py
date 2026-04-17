@@ -25,6 +25,7 @@ from services.session_processing.models import (
     SessionProcessResponse,
     SessionProcessStats,
 )
+from services.session_processing.session_job_processor import mark_analysis_status
 # Importação do Banco de Dados (SQLModel)
 from database import get_session, init_db
 from sqlmodel import Session as DBSession, select
@@ -523,6 +524,62 @@ async def get_raw_session_payload(
         current_user.user_id,
     )
     return raw_payload
+
+
+@app.post("/sessions/{session_uuid}/reprocess", response_model=SessionJobSubmissionResponse, status_code=status.HTTP_202_ACCEPTED)
+async def reprocess_session(
+    session_uuid: str,
+    current_user: TokenData = Depends(get_current_user),
+    session: DBSession = Depends(get_session),
+) -> SessionJobSubmissionResponse:
+    """
+    Reenfileira o processamento de uma sessão já persistida no storage.
+    """
+    logger.info(
+        "Solicitando reprocessamento da sessão | session_uuid=%s | user_id=%s",
+        session_uuid,
+        current_user.user_id,
+    )
+
+    statement = select(SessionAnalysis).where(
+        SessionAnalysis.session_uuid == session_uuid,
+        SessionAnalysis.user_id == current_user.user_id,
+    )
+    analysis = session.exec(statement).first()
+
+    if not analysis:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sessão não encontrada para o usuário autenticado",
+        )
+
+    message_payload = {
+        "job_type": "reprocess",
+        "user_id": current_user.user_id,
+        "session_uuid": session_uuid,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    try:
+        mark_analysis_status(
+            session,
+            user_id=current_user.user_id,
+            session_uuid=session_uuid,
+            status="queued",
+            processing_error=None,
+        )
+        await publish_job_message(message_payload)
+        return SessionJobSubmissionResponse(
+            status="queued",
+            message="Sessão reenfileirada para reprocessamento assíncrono",
+            session_uuid=session_uuid,
+            user_id=current_user.user_id,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Falha ao reenfileirar sessão para reprocessamento: {str(e)}"
+        )
 
 
 @app.get("/sessions/{session_uuid}/status", response_model=SessionJobStatusResponse)

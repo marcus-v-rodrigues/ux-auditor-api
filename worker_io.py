@@ -281,11 +281,19 @@ class RabbitMQConsumer:
                             "Campo 'events' inválido na mensagem de ingestão"
                         )
 
-                    # Persistência do payload bruto no MinIO antes de iniciar o pipeline
+                    # Persistência do payload de sessão no MinIO sem o envelope da fila.
+                    storage_payload = {
+                        "user_id": user_id,
+                        "session_uuid": session_uuid,
+                        "events": raw_events,
+                        "metadata": metadata,
+                        "timestamp": message_data.get("timestamp"),
+                    }
+
                     upload_success = await self.storage_client.upload_session(
                         user_id=user_id,
                         session_uuid=session_uuid,
-                        session_data=message_data,
+                        session_data=storage_payload,
                     )
 
                     if not upload_success:
