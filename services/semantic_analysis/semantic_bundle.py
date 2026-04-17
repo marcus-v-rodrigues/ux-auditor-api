@@ -7,7 +7,7 @@ já é a interação canônica consolidada.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,7 @@ class SemanticSessionBundle(BaseModel):
     derived_signals: Dict[str, Any] = Field(default_factory=dict)
     analysis_ready_summary: AnalysisReadySummary = Field(default_factory=AnalysisReadySummary)
     pipeline_trace: Dict[str, Any] = Field(default_factory=dict)
+    extension_data: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
 def build_semantic_bundle(
@@ -49,9 +50,30 @@ def build_semantic_bundle(
     heuristic_matches: List[HeuristicMatch],
     segments: List[SessionSegment],
     pipeline_trace: Dict[str, Any],
+    extension_metadata: Optional[Dict[str, Any]] = None,
 ) -> SemanticSessionBundle:
-    """Monta o bundle final a partir das saídas consolidadas do pipeline."""
+    """
+    Monta o bundle final consolidando saídas internas e dados externos da extensão.
+    
+    O bundle é a unidade fundamental de interpretação do agente da Fase 2. Ele
+    remove o ruído técnico do rrweb e expõe uma visão semântica, agora enriquecida
+    com evidências de acessibilidade e interações sumarizadas no cliente.
+    """
+    
+    # Extrai e organiza metadados da extensão úteis para a interpretação final.
+    # Filtramos apenas os blocos relevantes (axe, heuristics, summary) para manter
+    # o payload do LLM otimizado e focado em sinais de UX.
+    extension_data = {}
+    if extension_metadata:
+        extension_data = {
+            "axe": extension_metadata.get("axe_preliminary_analysis"),
+            "heuristics": extension_metadata.get("heuristic_evidence"),
+            "interaction_summary": extension_metadata.get("interaction_summary"),
+            "ui_dynamics": extension_metadata.get("ui_dynamics"),
+            "ux_markers": extension_metadata.get("ux_markers")
+        }
 
+    # Gera estatísticas derivadas para o cabeçalho do bundle (AnalysisReadySummary)
     primary_flow = [item.interaction_type for item in canonical_interactions[:12]]
     notable_signals = [match.heuristic_name for match in heuristic_matches[:10]]
     derived_signals = {
@@ -86,4 +108,5 @@ def build_semantic_bundle(
             notable_signals=notable_signals,
         ),
         pipeline_trace=pipeline_trace,
+        extension_data=extension_data,
     )

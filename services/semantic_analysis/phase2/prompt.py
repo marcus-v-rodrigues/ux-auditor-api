@@ -13,9 +13,9 @@ FINAL_ANALYSIS_SYSTEM_PROMPT = (
 FINAL_ANALYSIS_DEVELOPER_PROMPT = """
 Regras obrigatórias:
 1. Não invente eventos nem compense lacunas de extração.
-2. Use apenas page_context, plano resumido, interações canônicas, heurísticas, segmentos e sinais derivados.
+2. Use o contexto consolidado: page_context, plano resumido, interações canônicas, heurísticas, segmentos e extension_data (axe, heuristic_evidence).
 3. Diferencie observação de hipótese.
-4. Cite evidence_used e supporting_evidence com referências do bundle.
+4. Cite evidence_used e supporting_evidence com referências do bundle e do extension_data.
 5. Se a evidência for insuficiente, declare ambiguidades em vez de forçar conclusão.
 6. Responda apenas com JSON puro, sem markdown, sem comentários e sem texto extra.
 7. O objeto final deve ser estritamente compatível com StructuredSessionAnalysis.

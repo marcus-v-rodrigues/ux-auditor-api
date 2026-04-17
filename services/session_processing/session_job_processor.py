@@ -223,16 +223,32 @@ async def process_session_events(
     user_id: str,
     session_uuid: str,
     raw_events: List[Dict[str, Any]],
+    extension_metadata: Optional[Dict[str, Any]] = None,
 ) -> SessionProcessResponse:
     """
-    Executa o pipeline pesado de análise para uma sessão rrweb.
+    Executa o pipeline pesado de análise (Fase 1, Heurísticas, Fase 2).
+    
+    Esta função orquestra o fluxo de processamento assíncrono. Ela utiliza
+    os eventos brutos do rrweb para reconstrução e os metadados da extensão
+    para enriquecer o contexto enviado aos agentes de IA e aos motores de 
+    heurísticas estruturais.
     """
     _ensure_user(session, user_id)
 
+    # Normaliza eventos brutos (dicionários) para instâncias do modelo RRWebEvent
     rrweb_events = _normalize_rrweb_events(raw_events)
 
-    processed = SessionPreprocessor.process(rrweb_events)
-    semantic_bundle, analysis_result = await run_semantic_pipeline(rrweb_events, processed)
+    # Fase A: Pré-processamento neutro para extração de cinemática e DOM simplificado.
+    # Passamos os metadados da extensão para otimizar o contexto inicial.
+    processed = SessionPreprocessor.process(rrweb_events, extension_metadata=extension_metadata)
+    
+    # Fase B: Pipeline Semântico (Orquestração de Fase 1 e Fase 2).
+    # O bundle semântico gerado conterá as evidências de Axe e Heurísticas de cliente.
+    semantic_bundle, analysis_result = await run_semantic_pipeline(
+        rrweb_events, 
+        processed, 
+        extension_metadata=extension_metadata
+    )
     llm_output = analysis_result.model_dump(mode="json")
     unpacked = unpack_semantic_llm_output(llm_output)
 

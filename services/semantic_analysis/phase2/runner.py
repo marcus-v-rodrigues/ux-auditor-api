@@ -22,15 +22,44 @@ from services.semantic_analysis.semantic_bundle import SemanticSessionBundle
 
 
 def _fallback_final_analysis(bundle: SemanticSessionBundle, error_message: str = "") -> AnalysisResult:
-    """Mantém o pipeline operacional sem reintroduzir parsing frágil."""
+    """
+    Mantém o pipeline operacional gerando uma análise básica via fallback.
+    
+    Esta função é disparada se o LLM da Fase 2 falhar. Ela utiliza as interações
+    canônicas, as heurísticas detectadas e os sinais enriquecidos da extensão 
+    (como violações AXE e heurísticas de cliente) para construir uma narrativa
+    e identificar pontos de fricção mínimos de forma determinística.
+    """
 
     evidence_used = []
     evidence_used.extend([f"page:{bundle.page_context.get('page_type', '')}"])
     evidence_used.extend([f"flow:{item}" for item in bundle.analysis_ready_summary.primary_flow[:4]])
     evidence_used.extend([f"heuristic:{item}" for item in bundle.analysis_ready_summary.notable_signals[:4]])
+    
+    # Enriquecimento com dados da extensão (Axe/Heurísticas nativas do cliente)
+    ext_data = bundle.extension_data or {}
+    axe_violations = ext_data.get("axe", {}).get("runs", [{}])[0].get("violations", []) if ext_data.get("axe") else []
+    ext_heuristics = ext_data.get("heuristics", {}).get("usability", []) if ext_data.get("heuristics") else []
+    
+    # Registra a presença de violações de acessibilidade como evidência de fricção
+    if axe_violations:
+        evidence_used.append(f"axe_violations:{len(axe_violations)}")
+    
+    # Registra heurísticas detectadas nativamente pela extensão no navegador
+    if ext_heuristics:
+        evidence_used.append(f"extension_heuristics:{len(ext_heuristics)}")
+
     page_goal = bundle.page_context.get("page_goal", "interagir com a interface")
     submit_count = sum(1 for item in bundle.canonical_interactions if item.interaction_type == "button_submit")
     friction_signals = [item.heuristic_name for item in bundle.heuristic_matches if "hesitation" in item.heuristic_name or "fragmentation" in item.heuristic_name]
+    
+    # Adiciona sinais de fricção vindos da extensão (ex: rage click detectado no client)
+    # Isso garante que mesmo no fallback o sistema reporte problemas detectados no navegador.
+    for h in ext_heuristics:
+        kind = h.get("kind")
+        if kind and kind not in friction_signals:
+            friction_signals.append(kind)
+
     progress_signals = []
     if submit_count:
         progress_signals.append(

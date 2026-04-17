@@ -99,13 +99,51 @@ class ProcessedSession(BaseModel):
 
 
 class RRWebEvent(BaseModel):
+    """Representação técnica de um evento individual do rrweb."""
     type: int
     data: Dict[str, Any]
     timestamp: int
 
 
-class AnalyzeRequest(BaseModel):
+class SessionMeta(BaseModel):
+    """Metadados macro da sessão coletados no navegador."""
+    session_id: str
+    started_at: int
+    ended_at: int
+    page_url: str
+    page_title: str
+    user_agent: str
+
+
+class RRWebEvents(BaseModel):
+    """Contêiner para a lista de eventos brutos de replay."""
     events: List[RRWebEvent]
+
+
+class ExtensionSessionPayload(BaseModel):
+    """
+    Contrato consolidado enviado pelo novo motor da extensão UX Auditor.
+    
+    Este payload substitui a lista de eventos legada, permitindo que a API
+    ingira análises pré-calculadas (Axe, Semântica, Heurísticas de cliente)
+    junto com o rastro técnico do rrweb.
+    """
+    session_meta: Optional[SessionMeta] = None
+    privacy: Optional[Dict[str, Any]] = None
+    capture_config: Optional[Dict[str, Any]] = None
+    rrweb: RRWebEvents
+    axe_preliminary_analysis: Optional[Dict[str, Any]] = Field(None, description="Auditoria axe-core automática")
+    page_semantics: Optional[Dict[str, Any]] = Field(None, description="Mapeamento de landmarks e elementos interativos")
+    interaction_summary: Optional[Dict[str, Any]] = Field(None, description="Sumário de movimentos de mouse e digitação")
+    ui_dynamics: Optional[Dict[str, Any]] = Field(None, description="Mudanças bruscas de layout e feedback")
+    heuristic_evidence: Optional[Dict[str, Any]] = Field(None, description="Heurísticas detectadas em tempo real no cliente")
+    ux_markers: Optional[List[Dict[str, Any]]] = Field(None, description="Marcadores de eventos de negócio (ex: toast, modal)")
+
+
+class AnalyzeRequest(BaseModel):
+    """Requisição de análise que suporta o novo payload completo."""
+    events: Optional[List[RRWebEvent]] = None
+    payload: Optional[ExtensionSessionPayload] = None
 
 
 class SessionProcessStats(BaseModel):

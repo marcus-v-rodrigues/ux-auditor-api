@@ -15,7 +15,13 @@ from utils.logging_config import configure_logging
 # Importação dos Modelos
 from services.core.auth import get_current_user, TokenData
 from services.core.models import RegisterRequest, RegisterResponse, SessionAnalysis, User
-from services.session_processing.models import SessionJobStatusResponse, SessionJobSubmissionResponse, SessionProcessResponse, SessionProcessStats
+from services.session_processing.models import (
+    ExtensionSessionPayload,
+    SessionJobStatusResponse,
+    SessionJobSubmissionResponse,
+    SessionProcessResponse,
+    SessionProcessStats,
+)
 # Importação do Banco de Dados (SQLModel)
 from database import get_session, init_db
 from sqlmodel import Session as DBSession, select
@@ -374,49 +380,43 @@ async def register_user(
 
 @app.post("/ingest", response_model=SessionJobSubmissionResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_session(
-    events: List[Dict[str, Any]],
+    payload: ExtensionSessionPayload,
     current_user: TokenData = Depends(get_current_user)
 ) -> SessionJobSubmissionResponse:
     """
-    Endpoint de Ingestão de Telemetria (Protegido por OAuth2).
+    Endpoint de Ingestão de Telemetria Enriquecida (Protegido por OAuth2).
     
-    Recebe eventos de telemetria do rrweb e os envia para a fila RabbitMQ
-    para processamento assíncrono. Este endpoint é protegido por autenticação
-    OAuth2 - requer um token JWT válido emitido pelo janus-idp.
+    Este endpoint recebe o payload consolidado da extensão UX Auditor. Ao contrário
+    da versão anterior que recebia apenas eventos brutos, este novo contrato
+    já traz metadados de sessão, análise de acessibilidade (axe) e sumários
+    de interação pré-calculados no cliente.
     
-    Fluxo de Execução:
-    1. Valida o token JWT usando a dependência get_current_user
-    2. Gera um session_uuid único para esta ingestão
-    3. Envia os eventos para a fila RabbitMQ com metadados (user_id, session_uuid)
-    4. Retorna confirmação da ingestão
-    
-    Autenticação:
-    - Requer cabeçalho: Authorization: Bearer <JWT_TOKEN>
-    - Token deve ser emitido pelo janus-idp
-    - Token deve conter claims: sub (user_id), exp (expiration), iss (issuer)
-    
-    Args:
-        events: Lista de eventos de telemetria do rrweb (JSON)
-        current_user: TokenData extraído do JWT (injetado via dependência)
-        
-    Returns:
-        Dict com session_uuid e status da ingestão
-        
-    Raises:
-        HTTPException: 401 Unauthorized se token for inválido ou ausente
-        HTTPException: 500 Internal Server Error se falhar ao enviar para RabbitMQ
+    Fluxo:
+    1. Valida o payload contra o modelo ExtensionSessionPayload (Pydantic).
+    2. Extrai os eventos rrweb para o processamento de reconstrução.
+    3. Preserva o restante do payload como metadados para as fases de heurística e LLM.
+    4. Enfileira o job no RabbitMQ para processamento assíncrono.
     """
     session_uuid = str(uuid.uuid4())
+    
+    # Extração estruturada do payload validado pelo Pydantic.
+    # Convertemos os eventos rrweb para o formato de dicionário esperado pelo worker.
+    events = [event.model_dump(mode="json") for event in payload.rrweb.events]
+    
+    # Capturamos todos os metadados enriquecidos, excluindo a lista bruta de eventos 
+    # para evitar redundância no objeto de metadados enviado ao RabbitMQ.
+    metadata = payload.model_dump(mode="json", exclude={"rrweb"})
 
     message_payload = {
         "job_type": "ingest",
         "user_id": current_user.user_id,
         "session_uuid": session_uuid,
         "events": events,
+        "metadata": metadata, # Contém axe, semantics, interaction_summary, etc.
         "timestamp": datetime.utcnow().isoformat(),
     }
 
-    logger.info("Queued session ingest payload: %s", message_payload)
+    logger.info("Enfileirando job de ingestão enriquecida | session_uuid=%s", session_uuid)
 
     try:
         await publish_job_message(message_payload)

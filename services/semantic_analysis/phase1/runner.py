@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from services.session_processing.models import FlatDOMNode, ProcessedSession
 from services.semantic_analysis.phase1.agent import request_phase1_plan
@@ -33,8 +33,15 @@ from services.semantic_analysis.phase1.models import (
 RADIO_ITEM_PATTERN = re.compile(r"item\d+")
 
 
-def _payload_from_processed(processed: ProcessedSession) -> Dict[str, Any]:
-    """Constrói um payload pequeno e orientado à estrutura para a fase 1."""
+def _payload_from_processed(processed: ProcessedSession, extension_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Constrói o payload para o agente estrutural da Fase 1.
+    
+    Além do preview do DOM simplificado e do rastro de ações brutas, injetamos
+    o contexto pré-analisado da extensão (axe, page_semantics) para que o 
+    agente de planejamento consiga identificar landmarks e áreas críticas
+    sem depender apenas de heurísticas determinísticas de DOM.
+    """
 
     dom_preview = [
         {
@@ -58,6 +65,16 @@ def _payload_from_processed(processed: ProcessedSession) -> Dict[str, Any]:
         }
         for action in processed.raw_actions[:120]
     ]
+    
+    # Enriquecimento com dados pré-analisados da extensão
+    extension_context = {}
+    if extension_metadata:
+        extension_context = {
+            "axe": extension_metadata.get("axe_preliminary_analysis"),
+            "page_semantics": extension_metadata.get("page_semantics"),
+            "ux_markers": extension_metadata.get("ux_markers")
+        }
+
     return {
         "analysis_context": {
             "source": "neutral_preprocessing",
@@ -68,6 +85,7 @@ def _payload_from_processed(processed: ProcessedSession) -> Dict[str, Any]:
         "dom_preview": dom_preview,
         "dom_html_preview": list(processed.dom_map.values())[:150],
         "raw_action_preview": raw_action_preview,
+        "extension_context": extension_context,
     }
 
 
@@ -280,10 +298,19 @@ def _fallback_phase1_plan(processed: ProcessedSession) -> Phase1ExtractionPlan:
     )
 
 
-async def run_phase1_extraction_plan(processed: ProcessedSession) -> tuple[Phase1ExtractionPlan, Dict[str, Any]]:
-    """Executa a fase 1 e devolve o plano validado com um pequeno trace técnico."""
+async def run_phase1_extraction_plan(
+    processed: ProcessedSession,
+    extension_metadata: Optional[Dict[str, Any]] = None,
+) -> tuple[Phase1ExtractionPlan, Dict[str, Any]]:
+    """
+    Executa o agente estrutural para definir o plano de extração semântica.
+    
+    Este passo transforma a visão bruta da página em um modelo conceitual:
+    Onde estão os formulários? Quais botões são críticos? Como agrupar campos?
+    O plano resultante guia o executor determinístico no mapeamento final.
+    """
 
-    payload = _payload_from_processed(processed)
+    payload = _payload_from_processed(processed, extension_metadata=extension_metadata)
     payload_json = json.dumps(payload, ensure_ascii=False)
     try:
         plan = await request_phase1_plan(payload_json)

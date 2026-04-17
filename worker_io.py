@@ -269,13 +269,19 @@ class RabbitMQConsumer:
                 )
 
                 raw_events: List[Dict[str, Any]]
+                metadata: Dict[str, Any] = {}
+                
                 if job_type == "ingest":
+                    # Extração para job de ingestão inicial (proveniente da API /ingest)
                     raw_events = message_data.get("events", [])
+                    metadata = message_data.get("metadata", {})
+                    
                     if not isinstance(raw_events, list):
                         raise aio_pika.exceptions.MessageProcessError(
                             "Campo 'events' inválido na mensagem de ingestão"
                         )
 
+                    # Persistência do payload bruto no MinIO antes de iniciar o pipeline
                     upload_success = await self.storage_client.upload_session(
                         user_id=user_id,
                         session_uuid=session_uuid,
@@ -284,11 +290,13 @@ class RabbitMQConsumer:
 
                     if not upload_success:
                         logger.warning(
-                            f"Falha no upload. Mensagem será reprocessada. "
+                            f"Falha no upload para MinIO. Mensagem retornará para a fila. "
                             f"Delivery Tag: {message.delivery_tag}"
                         )
                         raise Exception("Upload para MinIO falhou")
+                
                 elif job_type == "reprocess":
+                    # Recuperação de dados do storage para jobs de reprocessamento
                     try:
                         stored_session = await self.storage_client.download_session(user_id, session_uuid)
                     except ClientError as e:
@@ -298,17 +306,21 @@ class RabbitMQConsumer:
                                 f"Sessão não encontrada no storage: {session_uuid}"
                             )
                         raise
+                    
                     raw_events = stored_session.get("events", [])
+                    metadata = stored_session.get("metadata", {})
+                    
                     if not isinstance(raw_events, list):
                         raise aio_pika.exceptions.MessageProcessError(
-                            "Sessão armazenada sem lista válida de eventos"
+                            "Sessão armazenada não contém lista de eventos válida"
                         )
                 else:
                     raise aio_pika.exceptions.MessageProcessError(
-                        f"job_type desconhecido: {job_type}"
+                        f"Tipo de job desconhecido: {job_type}"
                     )
 
                 with DBSession(engine) as db_session:
+                    # Atualiza status para 'processing' no PostgreSQL antes de iniciar o pipeline
                     mark_analysis_status(
                         db_session,
                         user_id=user_id,
@@ -317,11 +329,14 @@ class RabbitMQConsumer:
                     )
 
                     try:
+                        # Executa o pipeline de análise pesada (reconstrução + ML + LLM)
+                        # Passamos o 'extension_metadata' para aproveitar as análises prévias do navegador.
                         await process_session_events(
                             session=db_session,
                             user_id=user_id,
                             session_uuid=session_uuid,
                             raw_events=raw_events,
+                            extension_metadata=metadata,
                         )
                     except Exception as processing_error:
                         mark_analysis_status(

@@ -28,31 +28,28 @@ class SessionPreprocessor:
     RELEVANT_ATTRS: Set[str] = {'id', 'class', 'name', 'type', 'aria-label', 'placeholder', 'value', 'href', 'role'}
 
     @staticmethod
-    def process(events: List[RRWebEvent]) -> ProcessedSession:
+    def process(events: List[RRWebEvent], extension_metadata: Optional[Dict[str, Any]] = None) -> ProcessedSession:
         """
         Processa uma lista de eventos brutos do rrweb em artefatos neutros.
-
-        Contrato de saída:
-        - `dom_map` e `flattened_dom`: visão simplificada e navegável da interface.
-        - `raw_actions`: eventos observáveis ligados ao DOM sem fechar semântica.
-        - `event_index`: índice auxiliar para buscas determinísticas por tipo/alvo.
-        - `kinematics`: trajetória barata que ainda é útil para sinais globais.
-        - `page_metadata`: contexto macro de navegação.
-
-        A decisão arquitetural aqui é não antecipar agrupamento semântico. O
-        pipeline antigo fazia esse fechamento cedo demais e contaminava o resto
-        do fluxo com artefatos técnicos do rrweb.
+        
+        Aproveita metadados enriquecidos vindos da extensão (Axe, Semantics, Meta) 
+        para acelerar a reconstrução e fornecer contexto semântico imediato à fase 1.
+        
+        Args:
+            events: Lista de eventos técnicos do rrweb.
+            extension_metadata: Dicionário opcional contendo o payload consolidado da extensão.
+            
+        Returns:
+            ProcessedSession: Estrutura processada para análise semântica.
         """
         if not events:
             return ProcessedSession(initial_timestamp=0, total_duration=0)
 
         # 1. Setup Temporal: O primeiro evento marca o início (T0) da sessão
-        # events.sort(key=lambda x: x.timestamp) # Assumimos ordem cronológica vinda da persistência
-        
         start_time = events[0].timestamp
         last_timestamp = start_time
         
-        # Estruturas temporárias para acumular os dados durante o loop único
+        # Estruturas para acumular os dados durante o loop único (O(N))
         kinematics: List[KinematicVector] = []
         actions: List[UserAction] = []
         dom_map: Dict[int, str] = {}
@@ -61,6 +58,22 @@ class SessionPreprocessor:
         event_index: Dict[str, List[int]] = defaultdict(list)
         page_metadata = PageMetadata()
         current_page_url: Optional[str] = None
+
+        # Se houver metadados da extensão, preenchemos o contexto inicial de página
+        # para que o agente da fase 1 já saiba em que URL/Título o usuário estava.
+        if extension_metadata:
+            session_meta = extension_metadata.get("session_meta", {})
+            if session_meta:
+                page_metadata.initial_url = session_meta.get("page_url")
+                page_metadata.current_url = session_meta.get("page_url")
+                page_metadata.title = session_meta.get("page_title")
+                if page_metadata.initial_url:
+                    page_metadata.page_history.append(page_metadata.initial_url)
+
+            # Aproveita a semântica de página capturada pela extensão para logs e contexto
+            page_semantics = extension_metadata.get("page_semantics", {})
+            if page_semantics:
+                logger.info("Aproveitando page_semantics da extensão para enriquecimento estrutural")
 
         # Mapeamento de constantes internas do protocolo rrweb
         TYPE_DOM_SNAPSHOT = 2    # Captura completa do estado atual da página

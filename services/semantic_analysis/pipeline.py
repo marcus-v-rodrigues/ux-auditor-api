@@ -24,23 +24,35 @@ from utils.utils import log_snapshot
 async def run_semantic_pipeline(
     events: List[RRWebEvent],
     processed: Optional[ProcessedSession] = None,
+    extension_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[SemanticSessionBundle, AnalysisResult]:
-    """Executa o fluxo completo de ponta a ponta.
-
-    A função substitui o caminho antigo baseado em extração semântica global.
-    Ela mantém a sequência nova em um único lugar para evitar que múltiplos
-    módulos recriem pedaços da arquitetura.
+    """
+    Executa o orquestrador do fluxo completo (Ponta a Ponta).
+    
+    Esta função monta o SemanticSessionBundle consolidando:
+    1. O pré-processamento neutro (DOM achatado e cinemática).
+    2. O plano estrutural gerado pelo agente da Fase 1 (enriquecido com axe/semantics da extensão).
+    3. A execução determinística do plano sobre o rastro do rrweb.
+    4. A interpretação final (Fase 2) baseada no bundle consolidado.
     """
 
-    processed_session = processed or SessionPreprocessor.process(events)
+    # Se o processamento prévio não for injetado, executa o SessionPreprocessor
+    processed_session = processed or SessionPreprocessor.process(events, extension_metadata=extension_metadata)
     log_snapshot("processed_session", processed_session)
 
-    phase1_plan, phase1_trace = await run_phase1_extraction_plan(processed_session)
+    # Fase 1: Planejamento Estrutural. O agente recebe o contexto da extensão (se houver)
+    # para melhor identificar landmarks e objetivos da página.
+    phase1_plan, phase1_trace = await run_phase1_extraction_plan(
+        processed_session, 
+        extension_metadata=extension_metadata
+    )
     log_snapshot("phase1_plan", phase1_plan)
 
+    # Execução: Transforma o rastro técnico do rrweb em interações canônicas semânticas
     execution = execute_phase1_plan(phase1_plan, processed_session)
     log_snapshot("execution_phase1", execution)
 
+    # Detecção de Heurísticas: Combina sinais estruturais com padrões comportamentais
     heuristic_matches = detect_heuristics(
         phase1_plan,
         execution.canonical_interactions,
@@ -48,9 +60,12 @@ async def run_semantic_pipeline(
         settings.model_dump(),
     )
 
+    # Segmentação: Divide a sessão em episódios lógicos de interação
     segments = segment_canonical_session(execution.canonical_interactions)
     log_snapshot("segments", segments)
 
+    # Montagem do Bundle: Consolida tudo em um único objeto de transporte rico.
+    # Os dados da extensão (Axe, Heurísticas nativas) são injetados aqui.
     bundle = build_semantic_bundle(
         phase1_plan,
         execution.resolved_elements,
@@ -61,6 +76,7 @@ async def run_semantic_pipeline(
             "phase1": phase1_trace,
             "executor": execution.diagnostics,
         },
+        extension_metadata=extension_metadata,
     )
     analysis = await generate_final_session_analysis(bundle)
     bundle.pipeline_trace["final_analysis"] = analysis.pipeline_trace
