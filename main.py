@@ -15,8 +15,11 @@ from utils.logging_config import configure_logging
 # Importação dos Modelos
 from services.core.auth import get_current_user, TokenData
 from services.core.models import RegisterRequest, RegisterResponse, SessionAnalysis, User
+from services.core.storage import storage_service
 from services.session_processing.models import (
     ExtensionSessionPayload,
+    SessionHistoryItemResponse,
+    SessionHistoryResponse,
     SessionJobStatusResponse,
     SessionJobSubmissionResponse,
     SessionProcessResponse,
@@ -148,6 +151,28 @@ def _session_analysis_to_response(analysis: SessionAnalysis) -> SessionProcessRe
         semantic_bundle=semantic_bundle,
         llm_output=llm_output,
         structured_analysis=structured_analysis,
+    )
+
+
+def _session_analysis_to_history_item(analysis: SessionAnalysis) -> SessionHistoryItemResponse:
+    """Converte uma análise persistida em item resumido para listagem."""
+    narrative_block = analysis.narrative or {}
+    narrative_text = narrative_block.get("text")
+    narrative_preview = None
+
+    if isinstance(narrative_text, str):
+        trimmed = " ".join(narrative_text.split())
+        narrative_preview = trimmed[:197] + "..." if len(trimmed) > 200 else trimmed
+
+    return SessionHistoryItemResponse(
+        session_uuid=analysis.session_uuid,
+        user_id=analysis.user_id,
+        status=analysis.processing_status,
+        created_at=analysis.created_at,
+        updated_at=analysis.updated_at,
+        processed_at=analysis.processed_at,
+        processing_error=analysis.processing_error,
+        narrative_preview=narrative_preview,
     )
 
 
@@ -432,6 +457,72 @@ async def ingest_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Falha ao ingerir eventos da sessão: {str(e)}"
         )
+
+
+@app.get("/sessions", response_model=SessionHistoryResponse)
+async def list_user_sessions(
+    current_user: TokenData = Depends(get_current_user),
+    session: DBSession = Depends(get_session),
+) -> SessionHistoryResponse:
+    """
+    Lista as sessões já registradas do usuário autenticado.
+    """
+    logger.info("Listando sessões do usuário | user_id=%s", current_user.user_id)
+
+    statement = (
+        select(SessionAnalysis)
+        .where(SessionAnalysis.user_id == current_user.user_id)
+        .order_by(SessionAnalysis.created_at.desc())
+    )
+    analyses = session.exec(statement).all()
+
+    response = SessionHistoryResponse(
+        sessions=[_session_analysis_to_history_item(analysis) for analysis in analyses]
+    )
+
+    logger.info(
+        "Sessões recuperadas com sucesso | user_id=%s | total=%s",
+        current_user.user_id,
+        len(response.sessions),
+    )
+    return response
+
+
+@app.get("/sessions/{session_uuid}/raw", response_model=Dict[str, Any])
+async def get_raw_session_payload(
+    session_uuid: str,
+    current_user: TokenData = Depends(get_current_user),
+    session: DBSession = Depends(get_session),
+) -> Dict[str, Any]:
+    """
+    Retorna o payload bruto persistido no storage para a sessão do usuário.
+    """
+    logger.info(
+        "Consultando payload bruto da sessão | session_uuid=%s | user_id=%s",
+        session_uuid,
+        current_user.user_id,
+    )
+
+    statement = select(SessionAnalysis).where(
+        SessionAnalysis.session_uuid == session_uuid,
+        SessionAnalysis.user_id == current_user.user_id,
+    )
+    analysis = session.exec(statement).first()
+
+    if not analysis:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sessão não encontrada para o usuário autenticado",
+        )
+
+    raw_payload = await storage_service.get_session_data(current_user.user_id, session_uuid)
+
+    logger.info(
+        "Payload bruto recuperado com sucesso | session_uuid=%s | user_id=%s",
+        session_uuid,
+        current_user.user_id,
+    )
+    return raw_payload
 
 
 @app.get("/sessions/{session_uuid}/status", response_model=SessionJobStatusResponse)

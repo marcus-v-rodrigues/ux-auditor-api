@@ -12,6 +12,7 @@ posteriores, que era exatamente uma das fontes de acoplamento do fluxo antigo.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -180,3 +181,18 @@ class SessionJobStatusResponse(BaseModel):
     status: str
     processing_error: Optional[str] = None
     result: Optional[SessionProcessResponse] = None
+
+
+class SessionHistoryItemResponse(BaseModel):
+    session_uuid: str
+    user_id: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    processed_at: Optional[datetime] = None
+    processing_error: Optional[str] = None
+    narrative_preview: Optional[str] = None
+
+
+class SessionHistoryResponse(BaseModel):
+    sessions: List[SessionHistoryItemResponse]
