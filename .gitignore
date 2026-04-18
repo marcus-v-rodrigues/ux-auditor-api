@@ -27,3 +27,6 @@ build/
 # Prisma
 prisma/migrations/
 node_modules/
+
+# Logs
+logs/
