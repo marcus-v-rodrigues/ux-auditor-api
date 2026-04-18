@@ -1,68 +1,54 @@
-# Motor Semântico: Interpretação Estruturada via LLM
+# Engine Semântica e Interpretação (LLM)
 
-## Visão Geral e Propósito
-O `semantic_engine.py` (em `semantic/semantic_engine.py`) representa a camada de interpretação de alto nível do sistema. Ele não reprocessa o rrweb bruto; consome apenas o `SemanticSessionBundle` já otimizado e produz uma análise estruturada, auditável e orientada a evidências.
+A camada de inteligência da UX Auditor API baseia-se em uma arquitetura de Agentes LLM especializados, utilizando saídas estruturadas (JSON Schema) para garantir integração determinística com o restante do sistema.
 
-## Arquitetura e Lógica
+## 1. Arquitetura de Duas Fases
+
+O processamento é dividido para otimizar o uso de tokens e aumentar a precisão da análise, evitando que o modelo se perca em detalhes técnicos irrelevantes.
+
+### Fase 1: Planejamento Estrutural (The Planner)
+O primeiro agente atua como um "analista de interface". Ele recebe o contexto da página (URL, título, landmarks principais) e um resumo técnico dos eventos.
+
+**Responsabilidades:**
+- **Mapeamento de Landmarks:** Identifica regiões funcionais (Header, Footer, Main Content, Modals).
+- **Tradução Semântica:** Mapeia seletores CSS (ex: `#btn-32`) para nomes humanos (ex: "Botão Confirmar Cadastro").
+- **Geração de Plano:** Define quais elementos devem ser monitorados para entender o objetivo do usuário.
+
+### Fase 2: Síntese e Psicometria (The Auditor)
+O segundo agente recebe o **Semantic Bundle** — um documento rico que contém as interações canônicas, heurísticas detectadas e anomalias de ML.
+
+**Responsabilidades:**
+- **Narrativa da Sessão:** Constrói um resumo executivo em linguagem natural.
+- **Hipóteses de Intenção:** Infere o que o usuário tentou realizar e onde parou.
+- **Pontos de Fricção:** Explica o *porquê* das frustrações detectadas (ex: "O usuário tentou clicar no logo esperando voltar para a home, mas o elemento não tinha link").
+- **Métricas Psicométricas:** Atribui scores de Confiança e Ambiguidade à análise.
+
+## 2. Structured Outputs e Confiabilidade
+
+Utilizamos o recurso de **Structured Outputs** (JSON Schema) da OpenAI para garantir que a resposta do LLM siga rigorosamente os modelos Pydantic definidos em `services/semantic_analysis/phase1/models.py` e `phase2/models.py`.
+
+### Vantagens:
+- **Zero Parsing Errors:** Elimina falhas de regex ou JSON mal-formado.
+- **Validação de Tipos:** Garante que enums, listas e campos obrigatórios estejam presentes.
+- **Integração Fluida:** Os dados retornados são instanciados diretamente em objetos do sistema.
+
+## 3. O "Semantic Bundle"
+
+O Bundle é o contrato de interface entre o mundo determinístico (Heurísticas/ML) e o mundo probabilístico (LLM). Ele compacta uma sessão de 5000 eventos `rrweb` em um resumo de ~20 interações semânticas, permitindo análises complexas em modelos com janelas de contexto menores e menor custo.
+
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#bfbfbf', 'edgeColor': '#5d5d5d' }, "flowchart": {"subGraphTitleMargin": {"bottom": 30}}}}%%
 graph TD
-    RAW[rrweb bruto] --> DETER[Pipeline determinístico]
-    DETER --> BUNDLE[SemanticSessionBundle]
-    BUNDLE --> LLM[Interpretação controlada via LLM]
-    LLM --> STRUCT[Análise estruturada]
-    STRUCT --> NARR[Resumo em linguagem acessível a humanos]
-    STRUCT --> REPORT[Relatório auditável]
+    A[Raw rrweb Events] -->|Compression| B[Semantic interactions]
+    C[Heuristic Matches] --> D[Semantic Bundle]
+    E[ML Anomalies] --> D
+    B --> D
+    D -->|Input| F[Phase 2 Agent]
+    F -->|Output| G[Structured Analysis]
 ```
 
-O motor opera em duas fases distintas:
+## 4. Prompt Engineering
 
-1.  **Preparação do pacote de evidências:** o pipeline determinístico gera fatos observáveis, sinais derivados, heurísticas, segmentos de tarefa e trace compactada.
-2.  **Interpretação via LLM:** o modelo lê apenas o bundle intermediário e produz:
-    * `session_narrative`
-    * `goal_hypothesis`
-    * `behavioral_patterns`
-    * `friction_points`
-    * `progress_signals`
-    * `ambiguities`
-    * `hypotheses`
-    * `evidence_used`
-    * `overall_confidence`
-
-## Contrato Epistemológico
-O LLM deve:
-* tratar fatos observados como evidência primária
-* distinguir observação de inferência
-* atribuir confiança às hipóteses
-* explicitar ambiguidades
-* evitar conclusões categóricas quando a base é fraca
-
-O LLM não deve:
-* inventar eventos ausentes
-* afirmar intenção, frustração ou carga cognitiva como fato
-* reprocessar o rrweb bruto
-* narrar cada clique ou evento técnico em sequência literal
-
-## Saída Estruturada
-A função `generate_structured_session_analysis(...)` retorna um envelope com:
-* `status`
-* `structured_analysis`
-* `human_readable_summary`
-* `structured_fallback`
-* `error`
-
-A função `generate_human_readable_narrative(...)` deriva a narrativa textual da análise estruturada, sem inverter essa dependência.
-
-## Parâmetros Técnicos
-* `LLM_MODEL`: NousResearch/Hermes-4-405B (Foco em raciocínio complexo).
-* `temperature=0.2` Para reduzir variação e extrapolação
-* `top_p=1.0`
-* Retorno em JSON estrito
-
-## Mapeamento Tecnológico e Referências
-*   **NLG (Natural Language Generation):** Técnica de converter dados estruturados em texto.
-*   **WAI-ARIA:** Padrão para acessibilidade web (usado no Self-Healing). [W3C Reference](https://www.w3.org/WAI/standards-guidelines/aria/)
-*   **Embeddings de Texto:** Baseados em arquiteturas Transformer (BERT/GPT).
-
-## Justificativa de Escolha
-O uso de LLMs de alta escala (405B parâmetros) justifica-se pela necessidade de compreender nuances subjetivas do comportamento humano que algoritmos tradicionais não conseguem capturar.
+Os prompts são versionados e armazenados em `services/semantic_analysis/phase1/prompt.py` e `phase2/prompt.py`. Eles utilizam técnicas de:
+- **Few-shot Prompting:** Exemplos de mapeamento semântico.
+- **Chain of Thought:** Instruções para o modelo raciocinar sobre as evidências antes de concluir a intenção.
+- **Role Play:** O modelo é instruído a atuar como um "Senior UX Researcher".

@@ -1,43 +1,67 @@
-# Infraestrutura: Autenticação, Persistência e Mensageria
+# Infraestrutura de Autenticação e Segurança
 
-## Visão Geral e Propósito
-Este módulo documenta a espinha dorsal da **UX Auditor API**, responsável pela orquestração de serviços, segurança e persistência de dados. O sistema foi projetado para ser resiliente e escalável, integrando-se a um ecossistema de microserviços.
+Este documento detalha a implementação do **Resource Server OAuth2** e a integração com o provedor de identidade **Janus IDP**.
 
-## Arquitetura e Lógica
+## 1. Modelo de Segurança
+
+A UX Auditor API atua como um Resource Server que não armazena credenciais. Toda a autenticação é delegada ao Janus IDP via tokens **JWT RS256**.
+
+### Fluxo de Autenticação
+
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#bfbfbf', 'edgeColor': '#5d5d5d' }, "flowchart": {"subGraphTitleMargin": {"bottom": 30}}}}%%
-graph LR
-    U[Usuário] -->|OAuth2/OIDC| Janus[Janus IDP]
-    Janus -->|UUID Sync| UXA[UX Auditor API]
-    UXA -->|Pub| RMQ[RabbitMQ: Quorum]
-    RMQ -->|Sub| W[Worker]
-    W -->|Persist| S3[Garage S3: Objeto]
-    W -->|Store| DB[(PostgreSQL: SQLModel)]
+sequenceDiagram
+    participant U as Usuário/Extension
+    participant J as Janus IDP
+    participant API as UX Auditor API
+    
+    U->>J: Login (Credentials)
+    J-->>U: JWT Access Token (RS256)
+    U->>API: Request + Bearer Token
+    API->>API: Validação via JWKS (Public Key)
+    alt Token Válido
+        API-->>U: Success (200 OK)
+    else Token Inválido/Expirado
+        API-->>U: Unauthorized (401)
+    end
 ```
 
-A infraestrutura baseia-se em quatro pilares:
+## 2. Validação Dinâmica (JWKS)
 
-1.  **Autenticação Unificada (Janus IDP):** O sistema não gerencia senhas localmente. Ele atua como um provedor de recursos (Resource Server) em um fluxo OAuth2. O registro de usuários é sincronizado via API `X-Service-Key` para garantir paridade de UUIDs entre o Identity Provider (Janus) e o UX Auditor.
-2.  **Mensageria Assíncrona (RabbitMQ):** Ingestão de telemetria é desacoplada do processamento. O endpoint `/ingest` apenas publica na fila, garantindo baixa latência para o cliente de captura.
-3.  **Storage Distribuído (Garage S3):** Eventos brutos volumosos são armazenados em um objeto S3, mantendo o banco de dados relacional limpo e performático.
-4.  **Persistência Relacional (SQLModel/PostgreSQL):** Utiliza SQLModel (baseado em SQLAlchemy e Pydantic) para garantir que os modelos de dados da API sejam idênticos aos esquemas do banco.
+Em vez de armazenar a chave pública localmente, a API utiliza o endpoint **JWKS (JSON Web Key Set)** do Janus para obter as chaves de validação dinamicamente.
 
-## Fundamentação Matemática
-A integridade dos dados é garantida via hashing e validação de tokens JWT.
-*   **Assinatura de Token:** 
-    $$ \text{Signature} = \text{RS256}(\text{header} + "." + \text{payload}, \text{private key}) $$
-*   **Idempotência de Registro:** O fluxo de registro utiliza o UUID retornado pelo Janus como chave primária, garantindo consistência referencial ($FK = PK$).
+- **Endpoint:** `${AUTH_ISSUER_URL}/protocol/openid-connect/certs`
+- **Algoritmo:** RS256 (Criptografia Assimétrica)
+- **Cache:** As chaves são cacheadas por 5 minutos para otimizar a performance e reduzir latência.
 
-## Parâmetros Técnicos
-*   `RABBITMQ_QUEUE_TYPE`: Quorum (Garante alta disponibilidade e consistência).
-*   `JWT_ALGORITHM`: RS256.
-*   `SQLMODEL_POOL_SIZE`: Configurado para suportar concorrência de workers.
+## 3. Configuração de Variáveis de Ambiente
 
-## Mapeamento Tecnológico e Referências
-*   **FastAPI & SQLModel:** [Referência SQLModel](https://sqlmodel.tiangolo.com/)
-*   **RabbitMQ:** Broker de mensagens AMQP. [Documentação](https://www.rabbitmq.com/documentation.html)
-*   **Garage:** S3-compatible object storage. [Link](https://garagehq.cula.jp/)
-*   **OAuth 2.0 / OIDC:** Protocolos padrão de autorização. [RFC 6749](https://datatools.ietf.org/html/rfc6749)
+As seguintes variáveis no `.env` controlam a segurança:
 
-## Justificativa de Escolha
-A escolha pelo **RabbitMQ com Quorum Queues** justifica-se pela necessidade de durabilidade dos dados de telemetria (não podemos perder sessões de usuário). A integração com o **Janus IDP** permite que a ferramenta de auditoria seja facilmente integrada em ecossistemas empresariais já existentes que utilizam Single Sign-On (SSO).
+```env
+# URL do emissor (Realm do Janus)
+AUTH_ISSUER_URL=https://janus.exemplo.com/realms/master
+
+# Audience esperada (opcional, para maior segurança)
+AUTH_AUDIENCE=ux-auditor-api
+
+# Algoritmo de assinatura
+JWT_ALGORITHM=RS256
+```
+
+## 4. Claims Validados
+
+A API valida rigorosamente os seguintes campos no payload do JWT:
+- `iss` (Issuer): Deve corresponder exatamente à URL configurada.
+- `exp` (Expiration): O token deve estar dentro do prazo de validade.
+- `sub` (Subject): Identificador único do usuário, usado para vincular sessões no banco de dados.
+- `aud` (Audience): Se configurado, deve corresponder ao ID da API.
+
+## 5. Integração com Banco de Dados
+
+Ao receber um novo `user_id` (`sub`) via token, o sistema garante a existência do registro na tabela `User` via fluxo de "Just-in-Time Provisioning". Isso garante que toda análise de sessão esteja vinculada a uma identidade válida sem necessidade de um fluxo de registro separado na API.
+
+## 6. Segurança em Produção
+
+1.  **TLS/SSL:** Todos os endpoints devem ser servidos via HTTPS.
+2.  **Scopes:** A API pode ser configurada para validar escopos específicos (ex: `ux:write`, `ux:read`).
+3.  **Rate Limiting:** Recomendado implementar no nível de Ingress/Proxy para evitar abusos no endpoint `/ingest`.

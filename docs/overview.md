@@ -1,69 +1,82 @@
-# Visão Geral do Sistema: UX Auditor API
+# Arquitetura e Pipeline de Processamento
 
-## Visão Geral e Propósito
-A **UX Auditor API** é uma plataforma de backend especializada na análise quantitativa e qualitativa da experiência do usuário (UX). O sistema processa fluxos de eventos de telemetria capturados via `rrweb`, transformando logs técnicos brutos em *insights* acionáveis.
+Este documento detalha o funcionamento interno da **UX Auditor API**, descrevendo como os dados fluem desde a captura até a geração de insights semânticos.
 
-O propósito central é automatizar a auditoria de interfaces, identificando:
-1.  **Frustrações Técnicas:** Como cliques repetitivos em elementos não responsivos (*Rage Clicks*).
-2.  **Anomalias Comportamentais:** Movimentos de mouse erráticos detectados via Inteligência Artificial.
-3.  **Interpretação Estruturada:** Síntese analítica via LLM a partir de um bundle semântico intermediário.
-4.  **Hipóteses Comportamentais:** Inferências controladas com evidência explícita, confiança e ambiguidades.
-5.  **Agentes Tipados:** Três agentes LLM especializados com contratos Pydantic e validação estruturada.
+## 1. Visão Geral da Arquitetura
 
-## Arquitetura e Lógica
+O sistema utiliza uma abordagem de **Pipeline em Camadas**, onde cada etapa refina a abstração dos dados, transformando ruído técnico em sinal de UX.
+
+### Fluxo de Componentes (Mermaid)
+
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#bfbfbf', 'edgeColor': '#5d5d5d' }, "flowchart": {"subGraphTitleMargin": {"bottom": 30}}}}%%
-graph TD
-    A[Cliente: rrweb] -->|Eventos JSON| B(Ingestão: FastAPI)
-    B --> C{RabbitMQ}
-    C -->|Fila de Telemetria| D[Worker IO]
-    D --> E[(Garage S3: Raw Events)]
-    D --> F[Pipeline de Processamento]
-    subgraph Pipeline
-        F1[Pré-processamento] --> F2[Análise Heurística]
-        F1 --> F3[Análise ML]
-        F1 --> F4[Artefatos Semânticos]
-        F4 --> F5[Agente 1: Contexto da Página]
-        F5 --> F6[Agente 2: Dicionário Semântico]
-        F6 --> F7[Agente 3: Síntese Analítica]
+sequenceDiagram
+    participant FE as Frontend (rrweb)
+    participant API as FastAPI Ingestion
+    participant RMQ as RabbitMQ
+    participant W as Worker IO
+    participant S3 as Garage (S3)
+    participant LLM as OpenAI (Structured)
+    participant DB as PostgreSQL
+
+    FE->>API: POST /ingest (Raw Events)
+    API->>RMQ: Enfileira Trabalho
+    API-->>FE: HTTP 202 (Session UUID)
+    
+    RMQ->>W: Consome Mensagem
+    W->>S3: Persiste JSON Bruto
+    
+    rect rgb(240, 240, 240)
+    Note over W, LLM: Pipeline Semântico
+    W->>W: Pré-processamento (Kinematics + DOM)
+    W->>LLM: Fase 1: Planejamento (Landmarks)
+    LLM-->>W: Plano de Extração
+    W->>W: Execução Determinística
+    W->>W: Heurísticas & ML
+    W->>LLM: Fase 2: Síntese (Narrativa/Psicometria)
+    LLM-->>W: Análise Final
     end
-    F2 & F3 & F5 --> G[(PostgreSQL: SQLModel)]
+
+    W->>DB: Salva SessionAnalysis
+    W->>RMQ: ACK
 ```
 
-O sistema segue uma arquitetura orientada a serviços e processamento assíncrono:
+## 2. O Pipeline Semântico
 
-1.  **Ingestão:** Recebe eventos `rrweb` via REST API, autenticada via OAuth2 (Janus IDP).
-2.  **Mensageria e Storage:** Os eventos são enfileirados no **RabbitMQ** e persistidos no **Garage (S3)** para processamento posterior.
-3.  **Pipeline de Processamento (Worker):**
-    *   **Pré-processamento O(N):** Uma única passagem pelos dados separa vetores cinemáticos de ações semânticas.
-    *   **Análise de Baixo Nível:** Execução de algoritmos de ML (*Isolation Forest*) e heurísticas determinísticas.
-    *   **Camada Determinística Semântica:** Compressão, segmentação, evidências e artefatos intermediários tipados.
-    *   **Análise de Alto Nível:** Três agentes LLM tipados, com `PydanticAI` como orquestrador e `Instructor` como validador/runner estruturado.
-4.  **Persistência:** Resultados consolidados em banco de dados **PostgreSQL** via **SQLModel**.
+A inovação central do projeto é o **Semantic Session Bundle**, um artefato que consolida toda a inteligência da sessão.
 
-## Contrato do Frontend
+### 2.1 Pré-processamento O(N)
+Uma única passagem pelos eventos `rrweb` realiza:
+- **Cálculo Cinemático:** Transforma coordenadas (x, y, t) em vetores de velocidade e torque.
+- **Achatamento de DOM:** Reconstrói o estado dos elementos interagidos sem carregar todo o Snapshot do rrweb.
+- **Normalização:** Padroniza timestamps e tipos de eventos.
 
-O frontend não espera a request terminar o processamento pesado. O fluxo correto é:
+### 2.2 Fase 1: Planejamento Estrutural
+O agente LLM recebe um resumo da estrutura da página e o rastro técnico. Sua responsabilidade é:
+- Identificar **Landmarks** (ex: "Botão de Checkout", "Menu de Navegação").
+- Definir **Objetivos Prováveis** do usuário.
+- Mapear seletores CSS técnicos para nomes semânticos legíveis.
 
-1. chamar `POST /ingest`
-2. guardar o `session_uuid` retornado
-3. consultar `GET /sessions/{session_uuid}/status` em polling
-4. tratar `status == completed` como pronto
-5. tratar `status == failed` como erro de processamento
+### 2.3 Execução e Heurísticas
+Com o plano da Fase 1, o sistema executa algoritmos determinísticos para detectar:
+- **Rage Clicks:** Cliques rápidos e repetitivos na mesma região.
+- **Dead Clicks:** Cliques em elementos que não geram resposta no DOM.
+- **Anomalias de Movimento:** Detecção de hesitação motora via *Isolation Forest* (ML).
 
-Enquanto `status` estiver em `queued` ou `processing`, a sessão ainda não terminou.
+### 2.4 Fase 2: Síntese Analítica
+O agente final recebe o **Semantic Bundle** (compactado e enriquecido). Ele não precisa processar milhares de eventos técnicos, apenas dezenas de **Interações Canônicas**.
+**Outputs gerados:**
+- **Narrativa da Sessão:** Resumo textual do que o usuário tentou fazer.
+- **Hipóteses de Intenção:** O que o usuário queria alcançar.
+- **Pontos de Fricção:** Onde e por que o usuário falhou.
+- **Confiança:** Nível de certeza da análise baseada nas evidências.
 
-## Fundamentação Matemática
-O sistema combina geometria computacional para análise cinemática, heurísticas determinísticas e um estágio de interpretação semântica controlada.
+## 3. Persistência e Recuperação
 
-*   **Cinemática de Mouse:** Representada por vetores $V = \{t, x, y\}$.
-*   **Análise Semântica:** O LLM opera sobre evidências compactadas e não sobre o rrweb bruto.
+- **Dados Brutos (S3):** Mantidos para reprocessamento (replay) ou treinamento de novos modelos de ML.
+- **Dados Estruturados (SQL):** Armazenados via `SQLModel` para consultas rápidas via API e dashboards.
 
-## Mapeamento Tecnológico e Referências
-*   **Framework:** FastAPI. [Documentação](https://fastapi.tiangolo.com/)
-*   **Processamento Numérico:** NumPy e Scikit-Learn.
-*   **Captura de Sessão:** RRWeb. [Referência](https://github.com/rrweb-io/rrweb)
-*   **Identidade:** Janus IDP (OIDC/OAuth2).
+## 4. Tratamento de Erros e Resiliência
 
-## Justificativa de Escolha
-A escolha de uma arquitetura híbrida (Heurística + ML + LLM) justifica-se pela natureza multifacetada da UX: heurísticas capturam erros óbvios com baixo custo, ML detecta padrões sutis de anomalia, e o LLM interpreta evidências estruturadas sem reprocessar eventos brutos.
+- **Dead Letter Queues:** Mensagens que falham 5 vezes são movidas para uma fila de erro.
+- **Idempotência:** O sistema garante que a mesma sessão possa ser reprocessada sem duplicar registros no banco de dados.
+- **Circuit Breaker:** Proteção contra falhas na API da OpenAI ou instabilidades no Banco de Dados.
