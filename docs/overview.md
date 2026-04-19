@@ -15,7 +15,7 @@ sequenceDiagram
     participant RMQ as RabbitMQ
     participant W as Worker IO
     participant S3 as Garage (S3)
-    participant LLM as OpenAI (Structured)
+    participant LLM as IA Generativa
     participant DB as PostgreSQL
 
     FE->>API: POST /ingest (Raw Events)
@@ -80,3 +80,9 @@ O agente final recebe o **Semantic Bundle** (compactado e enriquecido). Ele não
 - **Dead Letter Queues:** Mensagens que falham 5 vezes são movidas para uma fila de erro.
 - **Idempotência:** O sistema garante que a mesma sessão possa ser reprocessada sem duplicar registros no banco de dados.
 - **Circuit Breaker:** Proteção contra falhas na API da OpenAI ou instabilidades no Banco de Dados.
+
+## Documentos Relacionados
+
+- [Motor de Análise Multimodal](./motor_analise_multimodal.md): Detalhamento técnico da integração entre Heurísticas, ML e Agentes LLM.
+- [Análise de Heurísticas](./heuristic_analysis.md): Catálogo completo de heurísticas comportamentais e estruturais.
+- [Pipeline Details](./pipeline_details.md): Detalhes técnicos da implementação do pipeline assíncrono.
