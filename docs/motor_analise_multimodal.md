@@ -9,65 +9,65 @@ O pipeline é dividido em etapas que elevam gradualmente o nível de abstração
 ### Diagrama de Fluxo
 
 ```mermaid
-%%{init: { 'theme': 'dark', 'themeVariables': { 'fontSize': '13px', 'fontFamily': 'Fira Code' }, 'flowchart': { 'rankSpacing': 80, 'nodeSpacing': 20, 'curve': 'basis' } } }%%
+%%{init: { 'theme': 'dark', 'themeVariables': { 'fontSize': '20px', 'fontFamily': 'sans-serif', 'subGraphTitleFontSize': '20px' }, 'flowchart': {'rankSpacing': 100, 'nodeSpacing': 100, 'curve': 'linear ' } } }%%
 flowchart TD
+
     %% ==================== COLUNA 1: INPUT ====================
-    subgraph Col1["[1] Ingestão de Telemetria"]
+    subgraph Col1["Ingestão de Telemetria"]
         direction TB
-        SD["Eventos rrweb<br/>(Rastro Técnico)"]
-        AD["Metadados Axe<br/>(Acessibilidade)"]
-        SMD["Anotações Semânticas<br/>(Contexto)"]
-        IS["Sumário Interação<br/>(Client-side)"]
+        SD["<b>Eventos rrweb</b><br/>(Registro técnico completo da sessão)"]
+        AD["<b>Metadados Axe</b><br/>(Diagnóstico automático de acessibilidade)"]
+        SMD["<b>Anotações Semânticas</b><br/>(Contexto de elementos e regiões)"]
+        IS["<b>Sumário Interação</b><br/>(Resumo inicial gerado no navegador)"]
     end
 
     %% ==================== COLUNA 2: PRE-PROC ====================
-    subgraph Col2["[2] Estruturação"]
+    subgraph Col2["Estruturação"]
         direction TB
-        KD["Vetores Cinemáticos<br/>(x, y, t)"]
-        DD["DOM Achatado<br/>(Árvore Simplificada)"]
-        P1A["Agente Fase 1 (LLM)<br/>(Extraction Plan)"]
+        KD["<b>Vetores Cinemáticos</b><br/>(Posição, tempo e movimento do cursor)"]
+        DD["<b>DOM Achatado</b><br/>(Árvore HTML simplificada para análise)"]
+        P1A["<b>Agente Fase 1 (LLM)</b><br/>(Planejamento de extração semântica)"]
     end
 
-    %% ==================== COLUNA 3: SINAIS (REORDENADA) ====================
-    subgraph Col3["[3] Extração de Sinais"]
+    %% ==================== COLUNA 3: SINAIS ====================
+    subgraph Col3["Extração de Sinais"]
         direction TB
         
-        %% Invertemos a ordem visual: ML na esquerda, Heurísticas/SH na direita
-        subgraph ML_Group["Detecção ML"]
+        subgraph ML_Group["Detecção por ML"]
             direction TB
-            AND["Outliers<br/>(Isolation Forest)"]
-            MLE["Movimento Errático"]
+            AND["<b>Outliers</b><br/>(Comportamentos fora do padrão da sessão)"]
+            MLE["<b>Movimento Errático</b><br/>(Trajetória anômala do cursor)"]
         end
 
-        CI["Interações Canônicas<br/>(Transformação)"]
+        CI["<b>Interações Canônicas</b><br/>(Eventos transformados e organizados)"]
 
-        subgraph RightAnalysis["Análise Heurística e Estrutural"]
+        subgraph RightAnalysis["Análise Heurística"]
             direction LR
-            BH["Comportamentais<br/>(Rage/Dead)"]
-            STH["Estruturais<br/>(Variação)"]
-            SH["Avaliação Nielsen<br/>(Structural)"]
+            BH["<b>Comportamentais</b><br/>(Rage Click, Dead Click, Hesitação)"]
+            STH["<b>Estruturais</b><br/>(Mudanças bruscas e instabilidade visual)"]
+            SH["<b>Avaliação Nielsen</b><br/>(Princípios clássicos de usabilidade)"]
         end
     end
 
     %% ==================== COLUNA 4: BUNDLE ====================
-    subgraph Col4["[4] Consolidação"]
+    subgraph Col4["Consolidação"]
         direction TB
-        SG["Segmentação de Episódios"]
-        SB["Semantic Session Bundle<br/>(Evidence Collector)"]
-        P2A["Agente Fase 2 (LLM)<br/>(Final Interpretation)"]
+        SG["<b>Segmentação de Episódios</b><br/>(Divisão da sessão em etapas)"]
+        SB["<b>Semantic Session Bundle</b><br/>(Coletor unificado de evidências)"]
+        P2A["<b>Agente Fase 2 (LLM)</b><br/>(Interpretação final da experiência)"]
     end
 
     %% ==================== COLUNA 5: OUTPUT ====================
-    subgraph Col5["[5] Insights (Quali/Quanti)"]
+    subgraph Col5["Insights (Quali/Quanti)"]
         direction TB
-        NAR["Narrativa"]
-        GH["Hipótese de Objetivo"]
-        FP["Pontos de Fricção"]
-        BP["Padrões Comport."]
-        PS["Sinais de Progresso"]
+        NAR["<b>Narrativa</b><br/>(Resumo textual da jornada)"]
+        GH["<b>Hipótese de Objetivo</b><br/>(Tarefa provável do usuário)"]
+        FP["<b>Pontos de Fricção</b><br/>(Locais de dificuldade ou erro)"]
+        BP["<b>Padrões Comport.</b><br/>(Tendências observadas na sessão)"]
+        PS["<b>Sinais de Progresso</b><br/>(Indícios de sucesso e avanço)"]
     end
 
-    %% --- CONEXÕES (AJUSTADAS PARA O NOVO FLUXO) ---
+    %% --- CONEXÕES ---
     SD --> KD & DD
     AD & SMD & DD --> P1A
     
@@ -78,18 +78,17 @@ flowchart TD
     
     CI --> SG & STH & BH
     
-    %% Concentração no Bundle
     MLE & BH & STH & SH & CI & SG & IS --> SB
     
     SB --> P2A
     P2A --> NAR & GH & FP & BP & PS
 
     %% Estilização
-    classDef inputStyle fill:#0D47A1,stroke:#fff,stroke-width:1px
-    classDef phase1Style fill:#1B5E20,stroke:#fff,stroke-width:1px
-    classDef analysisStyle fill:#E65100,stroke:#fff,stroke-width:1px
-    classDef phase2Style fill:#F9A825,stroke:#000,stroke-width:1px,color:#000
-    classDef outputStyle fill:#880E4F,stroke:#fff,stroke-width:1px
+    classDef inputStyle fill:#0D47A1,stroke:#fff,stroke-width:2px,color:#fff
+    classDef phase1Style fill:#1B5E20,stroke:#fff,stroke-width:2px,color:#fff
+    classDef analysisStyle fill:#E65100,stroke:#fff,stroke-width:2px,color:#fff
+    classDef phase2Style fill:#F9A825,stroke:#000,stroke-width:2px,color:#000
+    classDef outputStyle fill:#880E4F,stroke:#fff,stroke-width:2px,color:#fff
 
     class SD,AD,SMD,IS inputStyle
     class KD,DD,P1A phase1Style

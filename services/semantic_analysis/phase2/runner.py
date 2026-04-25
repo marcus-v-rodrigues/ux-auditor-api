@@ -18,7 +18,22 @@ from services.semantic_analysis.phase2.models import (
     SessionHypothesis,
     StructuredSessionAnalysis,
 )
+from services.semantic_analysis.phase2.repair import repair_analysis_with_bundle
+from services.semantic_analysis.phase2.validation import describe_incompleteness, is_incomplete_analysis
 from services.semantic_analysis.semantic_bundle import SemanticSessionBundle
+
+
+def _semantic_retry_prompt(problems: list[str]) -> str:
+    problems_text = "\n".join(f"- {problem}" for problem in problems)
+    return (
+        "A resposta anterior violou o contrato semântico. Os seguintes problemas foram encontrados:\n"
+        f"{problems_text}\n\n"
+        "Reanalise o Semantic Session Bundle e devolva um JSON completo.\n"
+        "É proibido deixar goal_hypothesis, behavioral_patterns, evidence_used ou "
+        "hypotheses[].justification vazios quando houver evidências no bundle.\n"
+        "Use apenas evidências presentes no bundle.\n"
+        "Não invente eventos, ações, sentimentos ou problemas."
+    )
 
 
 def _fallback_final_analysis(bundle: SemanticSessionBundle, error_message: str = "") -> AnalysisResult:
@@ -135,11 +150,46 @@ async def generate_final_session_analysis(bundle: SemanticSessionBundle) -> Anal
 
     try:
         response = await request_final_analysis(payload_json)
+        trace: Dict[str, Any] = {
+            "backend": "structured_llm",
+            "semantic_validation": "passed_first_pass",
+            "retry": "not_needed",
+            "deterministic_repair": "not_needed",
+        }
+
+        if is_incomplete_analysis(response):
+            first_pass_problems = describe_incompleteness(response)
+            trace.update(
+                {
+                    "semantic_validation": "failed_first_pass",
+                    "semantic_validation_issues": first_pass_problems,
+                    "retry": "performed",
+                }
+            )
+            response = await request_final_analysis(payload_json, correction_prompt=_semantic_retry_prompt(first_pass_problems))
+
+        if is_incomplete_analysis(response):
+            retry_problems = describe_incompleteness(response)
+            response = repair_analysis_with_bundle(response, bundle)
+            trace.update(
+                {
+                    "semantic_validation": "failed_after_retry",
+                    "semantic_validation_issues_after_retry": retry_problems,
+                    "deterministic_repair": "performed",
+                }
+            )
+
+        final_problems = describe_incompleteness(response)
+        if final_problems:
+            trace["semantic_validation_final_issues"] = final_problems
+        else:
+            trace["semantic_validation_final"] = "passed"
+
         return AnalysisResult(
             status="ok",
             structured_analysis=response,
             human_readable_summary=response.session_narrative,
-            pipeline_trace={"backend": "structured_llm"},
+            pipeline_trace=trace,
         )
     except Exception as exc:
         return _fallback_final_analysis(bundle, str(exc))
