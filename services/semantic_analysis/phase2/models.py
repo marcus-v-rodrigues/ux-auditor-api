@@ -16,21 +16,24 @@ class GoalHypothesis(BaseModel):
 
     value: str = Field(..., min_length=8)
     confidence: float = Field(..., ge=0.05, le=1.0)
-    justification: str = Field(..., min_length=20)
+    justification: str = Field(..., min_length=30)
 
 
 class InsightItem(BaseModel):
     """Item analítico reutilizado por padrões, fricções e progresso."""
 
     label: str = Field(..., min_length=3)
-    description: str = Field(default="", min_length=0)
-    confidence: float = Field(default=0.05, ge=0.05, le=1.0)
-    supporting_evidence: List[str] = Field(default_factory=list)
+    description: str = Field(..., min_length=30)
+    confidence: float = Field(..., ge=0.05, le=1.0)
+    supporting_evidence: List[str] = Field(..., min_length=1)
 
     @field_validator("supporting_evidence")
     @classmethod
     def remove_blank_evidence(cls, value: List[str]) -> List[str]:
-        return [item for item in value if str(item).strip()]
+        cleaned = [item for item in value if str(item).strip()]
+        if not cleaned:
+            raise ValueError("supporting_evidence deve conter pelo menos uma referência não vazia")
+        return cleaned
 
 
 class AmbiguityItem(BaseModel):
@@ -46,10 +49,10 @@ class AmbiguityItem(BaseModel):
 class SessionHypothesis(BaseModel):
     """Hipótese secundária probabilística apoiada pelo bundle limpo."""
 
-    statement: str = Field(..., min_length=20)
+    statement: str = Field(..., min_length=30)
     confidence: float = Field(..., ge=0.05, le=1.0)
     type: str = Field(..., min_length=3)
-    justification: str = Field(..., min_length=30)
+    justification: str = Field(..., min_length=40)
     evidence_refs: List[str] = Field(..., min_length=1)
 
     @field_validator("evidence_refs")
@@ -64,14 +67,14 @@ class SessionHypothesis(BaseModel):
 class StructuredSessionAnalysis(BaseModel):
     """Saída estruturada final do pipeline."""
 
-    session_narrative: str = ""
+    session_narrative: str = Field(..., min_length=120)
     goal_hypothesis: GoalHypothesis = Field(...)
-    behavioral_patterns: List[InsightItem] = Field(..., min_length=1)
+    behavioral_patterns: List[InsightItem] = Field(..., min_length=2)
     friction_points: List[InsightItem] = Field(default_factory=list)
     progress_signals: List[InsightItem] = Field(default_factory=list)
     ambiguities: List[AmbiguityItem] = Field(default_factory=list)
-    hypotheses: List[SessionHypothesis] = Field(default_factory=list)
-    evidence_used: List[str] = Field(..., min_length=1)
+    hypotheses: List[SessionHypothesis] = Field(..., min_length=1)
+    evidence_used: List[str] = Field(..., min_length=3)
     overall_confidence: float = Field(default=0.05, ge=0.05, le=1.0)
 
     @field_validator("evidence_used")

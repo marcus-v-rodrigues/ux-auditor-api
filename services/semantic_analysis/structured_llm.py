@@ -101,6 +101,8 @@ async def structured_llm_call(
     messages: list[dict[str, str]],
     temperature: float = 0,
     max_retries: int = 2,
+    max_tokens: int | None = None,
+    seed: int | None = None,
 ) -> TModel:
     """Executa uma chamada estruturada com parsing e validação explícitos.
 
@@ -143,12 +145,18 @@ async def structured_llm_call(
         else:
             logger.info("Structured LLM call schema=%s model=%s", schema_name, llm_model)
 
-        response = await client.chat.completions.create(
-            model=llm_model,
-            messages=call_messages,
-            temperature=temperature,
-            response_format=response_format,
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": llm_model,
+            "messages": call_messages,
+            "temperature": temperature,
+            "response_format": response_format,
+        }
+        if max_tokens is not None:
+            request_kwargs["max_completion_tokens"] = max_tokens
+        if seed is not None:
+            request_kwargs["seed"] = seed
+
+        response = await client.chat.completions.create(**request_kwargs)
 
         try:
             last_content = _extract_content(response)

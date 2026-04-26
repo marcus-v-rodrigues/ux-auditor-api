@@ -23,4 +23,7 @@ async def request_final_analysis(payload_json: str, correction_prompt: str | Non
         schema_name="structured_session_analysis",
         messages=messages,
         temperature=0,
+        max_retries=2,
+        max_tokens=6000,
+        seed=202502,
     )

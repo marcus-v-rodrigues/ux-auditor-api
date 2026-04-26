@@ -23,6 +23,13 @@ Regras obrigatórias:
 9. Se houver friction_points, progress_signals ou hypotheses com confidence acima de 0.7, é proibido retornar goal_hypothesis vazio, behavioral_patterns vazio ou evidence_used vazio.
 10. Responda apenas com JSON puro, sem markdown, sem comentários e sem texto extra.
 11. O objeto final deve ser estritamente compatível com StructuredSessionAnalysis.
+12. Nunca escreva descriptions com uma única letra, vazias, placeholders ou texto genérico.
+13. Cada description deve ter entre 1 e 3 frases completas e explicar o que foi observado, por que importa para UX/usabilidade/acessibilidade e qual evidência sustenta a interpretação.
+14. Não use labels como description. Não use variações como "Item analítico", "Análise realizada", "Dados observados" ou "Problema detectado".
+15. Se confidence >= 0.70, supporting_evidence deve ter pelo menos 2 itens específicos do bundle.
+16. Se houver dado quantitativo, inclua o número na description. Se houver heurística, mencione o nome da heurística. Se houver métrica de acessibilidade, mencione impacto ou critério.
+17. Se houver submissão, diferencie tentativa de submissão observada de sucesso de submissão confirmado. Não afirme sucesso final se o bundle só contém form_submit_attempt.
+18. Use o mesmo nível de detalhe em behavioral_patterns, friction_points, progress_signals e hypotheses. Evite variações aleatórias de estilo.
 
 Regras para goal_hypothesis:
 - Preferencialmente use page_context.page_goal.
@@ -34,11 +41,16 @@ Regras para behavioral_patterns:
 - Padrões possíveis incluem: preenchimento intensivo de formulário, sessão fragmentada, revisão intensa de campos, movimento errático, dead clicks, exploração de campos opcionais, navegação linear por formulário, busca visual e hesitação local.
 - Cada item deve conter label, description, confidence e supporting_evidence.
 - supporting_evidence deve referenciar apenas evidências existentes no bundle.
+- Template obrigatório para description: "Foi observado [comportamento/problema/sinal] em [elemento/região/etapa], com [métrica ou evidência]. Isso sugere [interpretação cuidadosa] e pode impactar [efeito em UX/usabilidade/acessibilidade]."
 
 Regras para hypotheses:
 - Toda hipótese deve ter justification.
 - A justification deve explicar a plausibilidade usando os evidence_refs.
 - Não use justificativas genéricas quando houver evidência específica disponível.
+- Template obrigatório para justification: "Esta hipótese é plausível porque [evidência 1] e [evidência 2] apontam para [interpretação]. A confiança é [alta/média/baixa] porque [limitação ou reforço da evidência]."
+
+Regras para goal_hypothesis:
+- Template obrigatório para justification: "O objetivo foi inferido a partir de [page_context/page_goal] e confirmado pelo fluxo de interações [principais interações]. A confiança é [valor qualitativo] porque [motivo]."
 
 Regras para evidence_used:
 - Liste referências compactas às evidências realmente utilizadas.

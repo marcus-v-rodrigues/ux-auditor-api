@@ -19,20 +19,26 @@ from services.semantic_analysis.phase2.models import (
     StructuredSessionAnalysis,
 )
 from services.semantic_analysis.phase2.repair import repair_analysis_with_bundle
-from services.semantic_analysis.phase2.validation import describe_incompleteness, is_incomplete_analysis
+from services.semantic_analysis.phase2.quality import score_analysis_quality
+from services.semantic_analysis.phase2.validation import describe_quality_problems
 from services.semantic_analysis.semantic_bundle import SemanticSessionBundle
 
 
 def _semantic_retry_prompt(problems: list[str]) -> str:
     problems_text = "\n".join(f"- {problem}" for problem in problems)
     return (
-        "A resposta anterior violou o contrato semântico. Os seguintes problemas foram encontrados:\n"
+        "A resposta anterior foi rejeitada pelo Quality Gate.\n\n"
+        "Problemas encontrados:\n"
         f"{problems_text}\n\n"
-        "Reanalise o Semantic Session Bundle e devolva um JSON completo.\n"
-        "É proibido deixar goal_hypothesis, behavioral_patterns, evidence_used ou "
-        "hypotheses[].justification vazios quando houver evidências no bundle.\n"
+        "Corrija a análise inteira seguindo estas regras:\n"
+        "- Não deixe descriptions vazias.\n"
+        "- Não use descrições de uma letra.\n"
+        "- Cada description deve ter 1 a 3 frases completas.\n"
+        "- Cada item com confidence >= 0.70 deve ter pelo menos 2 evidências.\n"
         "Use apenas evidências presentes no bundle.\n"
-        "Não invente eventos, ações, sentimentos ou problemas."
+        "- Não invente sucesso de submissão se houver apenas tentativa.\n"
+        "- Preserve JSON estrito compatível com StructuredSessionAnalysis.\n\n"
+        "Reanalise o Semantic Session Bundle abaixo e gere uma nova resposta completa."
     )
 
 
@@ -134,12 +140,22 @@ def _fallback_final_analysis(bundle: SemanticSessionBundle, error_message: str =
         evidence_used=evidence_used,
         overall_confidence=0.62 if bundle.canonical_interactions else 0.2,
     )
+    analysis = repair_analysis_with_bundle(analysis, bundle)
+    quality = score_analysis_quality(analysis)
     return AnalysisResult(
         status="ok" if not error_message else "fallback",
         structured_analysis=analysis,
         human_readable_summary=analysis.session_narrative,
         error=error_message or None,
-        pipeline_trace={"backend": "deterministic_fallback" if error_message else "deterministic"},
+        pipeline_trace={
+            "backend": "deterministic_fallback" if error_message else "deterministic",
+            "quality_gate": {
+                "deterministic_repair_performed": True,
+                "final_score": quality["score"],
+                "final_grade": quality["grade"],
+                "final_problems": quality["problems"],
+            },
+        },
     )
 
 
@@ -150,40 +166,46 @@ async def generate_final_session_analysis(bundle: SemanticSessionBundle) -> Anal
 
     try:
         response = await request_final_analysis(payload_json)
+        first_quality = score_analysis_quality(response)
         trace: Dict[str, Any] = {
             "backend": "structured_llm",
-            "semantic_validation": "passed_first_pass",
-            "retry": "not_needed",
-            "deterministic_repair": "not_needed",
+            "quality_gate": {
+                "first_pass_score": first_quality["score"],
+                "first_pass_grade": first_quality["grade"],
+                "first_pass_problems": first_quality["problems"],
+                "retry_performed": False,
+                "deterministic_repair_performed": False,
+            },
         }
 
-        if is_incomplete_analysis(response):
-            first_pass_problems = describe_incompleteness(response)
-            trace.update(
-                {
-                    "semantic_validation": "failed_first_pass",
-                    "semantic_validation_issues": first_pass_problems,
-                    "retry": "performed",
-                }
-            )
+        if first_quality["grade"] in {"poor", "invalid"}:
+            first_pass_problems = first_quality["problems"] or describe_quality_problems(response)
+            trace["quality_gate"]["retry_performed"] = True
             response = await request_final_analysis(payload_json, correction_prompt=_semantic_retry_prompt(first_pass_problems))
-
-        if is_incomplete_analysis(response):
-            retry_problems = describe_incompleteness(response)
-            response = repair_analysis_with_bundle(response, bundle)
-            trace.update(
+            second_quality = score_analysis_quality(response)
+            trace["quality_gate"].update(
                 {
-                    "semantic_validation": "failed_after_retry",
-                    "semantic_validation_issues_after_retry": retry_problems,
-                    "deterministic_repair": "performed",
+                    "second_pass_score": second_quality["score"],
+                    "second_pass_grade": second_quality["grade"],
+                    "second_pass_problems": second_quality["problems"],
                 }
             )
-
-        final_problems = describe_incompleteness(response)
-        if final_problems:
-            trace["semantic_validation_final_issues"] = final_problems
         else:
-            trace["semantic_validation_final"] = "passed"
+            second_quality = first_quality
+
+        if second_quality["grade"] in {"poor", "invalid"}:
+            response = repair_analysis_with_bundle(response, bundle)
+            trace["backend"] = "structured_llm_with_quality_repair"
+            trace["quality_gate"]["deterministic_repair_performed"] = True
+
+        final_quality = score_analysis_quality(response)
+        trace["quality_gate"].update(
+            {
+                "final_score": final_quality["score"],
+                "final_grade": final_quality["grade"],
+                "final_problems": final_quality["problems"],
+            }
+        )
 
         return AnalysisResult(
             status="ok",
