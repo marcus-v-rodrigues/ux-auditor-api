@@ -115,6 +115,35 @@ def test_quality_gate_detects_poor_real_response():
     assert any("hypotheses[0].justification" in problem for problem in problems)
 
 
+def test_quality_gate_rejects_raw_evidence_used():
+    analysis = _bad_analysis().model_copy(
+        update={
+            "evidence_used": [
+                "extension_data.interaction_summary:focus_flow=[{'out_of_order': False, 'timestamp': 1}]",
+                "extension_data.interaction_summary:heuristic_candidates=[{'field_name': 'fullName'}]",
+                "page_context.page_type:form",
+                "x" * 121,
+            ]
+        }
+    )
+
+    problems = describe_quality_problems(analysis)
+
+    assert any("evidence_used" in problem for problem in problems)
+    assert any("dump bruto" in problem for problem in problems)
+    assert any("120 caracteres" in problem for problem in problems)
+
+
+def test_quality_gate_rejects_too_many_evidence_items():
+    analysis = _bad_analysis().model_copy(
+        update={"evidence_used": [f"page_context.page_type:item_{index}" for index in range(26)]}
+    )
+
+    problems = describe_quality_problems(analysis)
+
+    assert any("mais de 25 itens" in problem for problem in problems)
+
+
 def test_repair_improves_quality_and_replaces_bad_descriptions():
     bundle = _bundle_with_real_bad_output_evidence()
     bad = _bad_analysis()

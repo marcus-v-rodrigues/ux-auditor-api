@@ -18,6 +18,7 @@ from services.semantic_analysis.phase2.models import (
     SessionHypothesis,
     StructuredSessionAnalysis,
 )
+from services.semantic_analysis.phase2.evidence import build_compact_evidence_from_bundle, compact_evidence_used
 from services.semantic_analysis.phase2.repair import repair_analysis_with_bundle
 from services.semantic_analysis.phase2.quality import score_analysis_quality
 from services.semantic_analysis.phase2.validation import describe_quality_problems
@@ -52,10 +53,8 @@ def _fallback_final_analysis(bundle: SemanticSessionBundle, error_message: str =
     e identificar pontos de fricção mínimos de forma determinística.
     """
 
-    evidence_used = []
-    evidence_used.extend([f"page:{bundle.page_context.get('page_type', '')}"])
-    evidence_used.extend([f"flow:{item}" for item in bundle.analysis_ready_summary.primary_flow[:4]])
-    evidence_used.extend([f"heuristic:{item}" for item in bundle.analysis_ready_summary.notable_signals[:4]])
+    evidence_used = build_compact_evidence_from_bundle(bundle)
+    evidence_used = compact_evidence_used(evidence_used)
     
     # Enriquecimento com dados da extensão (Axe/Heurísticas nativas do cliente)
     ext_data = bundle.extension_data or {}
@@ -88,7 +87,7 @@ def _fallback_final_analysis(bundle: SemanticSessionBundle, error_message: str =
                 label="submission_attempt",
                 description="A sessão contém pelo menos uma ação canônica de submissão após consolidação estrutural.",
                 confidence=0.74,
-                supporting_evidence=["interaction:button_submit"],
+                supporting_evidence=[item for item in evidence_used[:2] if item],
             )
         )
 
@@ -137,7 +136,7 @@ def _fallback_final_analysis(bundle: SemanticSessionBundle, error_message: str =
                 evidence_refs=evidence_used[:4],
             )
         ],
-        evidence_used=evidence_used,
+        evidence_used=compact_evidence_used(evidence_used),
         overall_confidence=0.62 if bundle.canonical_interactions else 0.2,
     )
     analysis = repair_analysis_with_bundle(analysis, bundle)

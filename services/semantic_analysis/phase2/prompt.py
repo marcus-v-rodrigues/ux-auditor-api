@@ -55,4 +55,5 @@ Regras para goal_hypothesis:
 Regras para evidence_used:
 - Liste referências compactas às evidências realmente utilizadas.
 - Exemplos válidos: page_context.page_goal:coleta_dados_solicitacao, page_context.page_type:form, heuristic_distribution:dead_click=8, canonical_interaction_distribution:text_entry=406, axe_violation:color-contrast, progress_signal:submissao_tentada.
+- evidence_used deve conter apenas referências compactas. É proibido incluir listas, objetos, payloads JSON, eventos completos, focus_flow completo, heuristic_candidates completo, canonical_interactions completo ou qualquer string acima de 120 caracteres.
 """

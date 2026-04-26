@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from services.semantic_analysis.phase2.evidence import is_raw_evidence_item
 from services.semantic_analysis.phase2.models import StructuredSessionAnalysis
 from services.semantic_analysis.phase2.quality import (
     GENERIC_LABELS,
@@ -61,6 +62,39 @@ def _specific_evidence_count(items: list[str]) -> int:
     return sum(1 for item in items if normalize_text(item).lower() not in generic)
 
 
+def _evidence_used_problems(items: list[str]) -> list[str]:
+    problems: list[str] = []
+    evidence = list(items or [])
+
+    if len(evidence) > 25:
+        problems.append("evidence_used tem mais de 25 itens")
+
+    for index, item in enumerate(evidence):
+        text = normalize_text(item)
+        if not text:
+            problems.append(f"evidence_used[{index}] está vazio")
+            continue
+        if len(text) > 120:
+            problems.append(f"evidence_used[{index}] tem mais de 120 caracteres")
+        lower = text.lower()
+        if is_raw_evidence_item(text) or any(
+            marker in lower
+            for marker in (
+                "[{",
+                "{'",
+                "css_selector",
+                "timestamp",
+                "focus_flow=[",
+                "heuristic_candidates=[",
+                "canonical_interactions=[",
+                "resolved_elements=[",
+            )
+        ):
+            problems.append(f"evidence_used[{index}] parece conter dump bruto")
+
+    return problems
+
+
 def describe_quality_problems(analysis: StructuredSessionAnalysis) -> list[str]:
     """Retorna problemas de completude e qualidade textual pós-LLM."""
 
@@ -80,6 +114,7 @@ def describe_quality_problems(analysis: StructuredSessionAnalysis) -> list[str]:
         problems.append("behavioral_patterns está vazio")
     if len(getattr(analysis, "evidence_used", []) or []) < 3:
         problems.append("evidence_used tem menos de 3 evidências rastreáveis")
+    problems.extend(_evidence_used_problems(list(getattr(analysis, "evidence_used", []) or [])))
 
     all_descriptions: list[str] = []
     all_labels: list[str] = []

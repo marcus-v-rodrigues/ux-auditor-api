@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from services.semantic_analysis.phase2.models import GoalHypothesis, InsightItem, SessionHypothesis, StructuredSessionAnalysis
+from services.semantic_analysis.phase2.evidence import build_compact_evidence_from_bundle, compact_evidence_used
 from services.semantic_analysis.phase2.quality import is_bad_text, normalize_text
 from services.semantic_analysis.semantic_bundle import SemanticSessionBundle
 
@@ -13,67 +14,20 @@ def _blank(value: object) -> bool:
     return not str(value or "").strip()
 
 
-def _dedupe(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        normalized = str(item or "").strip()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            result.append(normalized)
-    return result
-
-
 def _dict_from_bundle(bundle: SemanticSessionBundle, key: str) -> dict[str, Any]:
     value = bundle.derived_signals.get(key, {})
     return value if isinstance(value, dict) else {}
 
 
-def collect_bundle_evidence(bundle: SemanticSessionBundle) -> list[str]:
-    """Coleta referências compactas de evidências existentes no bundle."""
-
-    evidence: list[str] = []
-    page_type = bundle.page_context.get("page_type")
-    page_goal = bundle.page_context.get("page_goal")
-    if page_type:
-        evidence.append(f"page_context.page_type:{page_type}")
-    if page_goal:
-        evidence.append(f"page_context.page_goal:{page_goal}")
-
-    for item in bundle.analysis_ready_summary.primary_flow[:6]:
-        evidence.append(f"analysis_ready_summary.primary_flow:{item}")
-    for kind, count in _dict_from_bundle(bundle, "canonical_interaction_distribution").items():
-        evidence.append(f"canonical_interaction_distribution:{kind}={count}")
-    for name, count in _dict_from_bundle(bundle, "heuristic_distribution").items():
-        evidence.append(f"heuristic_distribution:{name}={count}")
-    for item in bundle.analysis_ready_summary.notable_signals[:8]:
-        evidence.append(f"notable_signal:{item}")
-
-    ext_data = bundle.extension_data or {}
-    axe_runs = ((ext_data.get("axe") or {}).get("runs") or []) if isinstance(ext_data.get("axe"), dict) else []
-    violations = axe_runs[0].get("violations", []) if axe_runs and isinstance(axe_runs[0], dict) else []
-    for violation in violations[:5]:
-        if isinstance(violation, dict) and violation.get("id"):
-            evidence.append(f"axe_violation:{violation['id']}")
-
-    interaction_summary = ext_data.get("interaction_summary")
-    if isinstance(interaction_summary, dict):
-        for key, value in list(interaction_summary.items())[:6]:
-            evidence.append(f"extension_data.interaction_summary:{key}={value}")
-
-    ext_heuristics = ext_data.get("heuristics")
-    if isinstance(ext_heuristics, dict):
-        usability = ext_heuristics.get("usability", [])
-        if isinstance(usability, list):
-            for item in usability[:8]:
-                if isinstance(item, dict):
-                    kind = item.get("kind") or item.get("name") or item.get("id")
-                    count = item.get("count") or item.get("occurrences") or item.get("total")
-                    if kind:
-                        suffix = f"={count}" if count is not None else ""
-                        evidence.append(f"extension_heuristic:{kind}{suffix}")
-
-    return _dedupe(evidence)
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in compact_evidence_used(items, max_items=200, max_len=120):
+        normalized = str(item or "").strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return result
 
 
 def _evidence_sentence(evidence: list[str]) -> str:
@@ -381,7 +335,13 @@ def repair_analysis_with_bundle(
 ) -> StructuredSessionAnalysis:
     """Completa campos vazios sem criar evidências fora do bundle."""
 
-    evidence = _dedupe(list(getattr(analysis, "evidence_used", []) or []) + collect_bundle_evidence(bundle))
+    evidence = compact_evidence_used(list(getattr(analysis, "evidence_used", []) or []))
+    bundle_evidence = build_compact_evidence_from_bundle(bundle)
+    if len(evidence) < 3:
+        evidence = bundle_evidence
+    else:
+        evidence = compact_evidence_used(evidence + bundle_evidence)
+
     if not evidence:
         evidence = ["bundle:semantic_session_present"]
 
